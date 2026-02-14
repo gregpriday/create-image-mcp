@@ -274,9 +274,40 @@ Edit `~/.config/Claude/claude_desktop_config.json`:
 
 ## Integration with Claude Code
 
-Add the MCP server using the `claude mcp add` command.
+### Option 1: Project-Level `mcp.json` (Recommended)
 
-### If Installed Globally (Recommended)
+Add an `mcp.json` file to your project root. This is the simplest approach and works automatically when Claude Code opens the project.
+
+**If installed globally:**
+```json
+{
+  "mcpServers": {
+    "create-image": {
+      "command": "create-image-mcp",
+      "env": {
+        "GOOGLE_API_KEY": "your_api_key_here"
+      }
+    }
+  }
+}
+```
+
+**If running locally:**
+```json
+{
+  "mcpServers": {
+    "create-image": {
+      "command": "node",
+      "args": ["/path/to/create-image-mcp/src/index.js"],
+      "env": {
+        "GOOGLE_API_KEY": "your_api_key_here"
+      }
+    }
+  }
+}
+```
+
+### Option 2: CLI Command
 
 **For current project only:**
 ```bash
@@ -286,12 +317,6 @@ claude mcp add --scope project create-image -e GOOGLE_API_KEY=your_api_key_here 
 **For your user (available in all projects):**
 ```bash
 claude mcp add --scope user create-image -e GOOGLE_API_KEY=your_api_key_here -- create-image-mcp
-```
-
-### If Running Locally
-
-```bash
-claude mcp add --scope project create-image -e GOOGLE_API_KEY=your_api_key_here -- node /path/to/create-image-mcp/src/index.js
 ```
 
 **Verify the server is running:**

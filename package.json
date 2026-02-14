@@ -25,7 +25,7 @@
   "homepage": "https://github.com/gpriday/create-image-mcp#readme",
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test test/unit/**/*.test.js",
+    "test": "node --test test/unit/tool-handler.test.js test/unit/tool-description.test.js",
     "test:integration": "node test/test-create-image-mcp.js",
     "test:all": "npm test && npm run test:integration",
     "dev": "node --watch src/index.js",

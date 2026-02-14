@@ -175,7 +175,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             output_file: {
               type: "string",
-              description: "File path to save the generated image. Supports both absolute paths (/Users/name/image.png) and relative paths (./output/image.png). If not provided, the image is returned as base64 data only.",
+              description: "File path to save the generated image. Supports both absolute paths (/Users/name/image.png) and relative paths (./output/image.png). The image will be written to this path and the path returned in the response.",
               examples: [
                 "./generated-image.png",
                 "output/my-image.png",
@@ -219,7 +219,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               examples: ["", "ALLOW_ADULT", "DONT_ALLOW"],
             },
           },
-          required: ["prompt"],
+          required: ["prompt", "output_file"],
         },
       },
     ],
@@ -279,15 +279,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   }
 
-  // Input validation for output_file (if provided)
-  if (outputFile !== undefined && outputFile !== null) {
-    if (typeof outputFile !== "string") {
-      throw new Error("output_file must be a string");
-    }
+  // Input validation for output_file (required)
+  if (!outputFile) {
+    throw new Error("Missing required parameter: output_file");
+  }
 
-    if (outputFile.trim().length === 0) {
-      throw new Error("output_file cannot be empty");
-    }
+  if (typeof outputFile !== "string") {
+    throw new Error("output_file must be a string");
+  }
+
+  if (outputFile.trim().length === 0) {
+    throw new Error("output_file cannot be empty");
   }
 
   // Input validation for aspect_ratio
@@ -398,55 +400,46 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    // Build MCP response content
-    const content = [];
+    // Save images to disk
+    const savedFiles = [];
+    const ext = extname(outputFile);
+    const baseName = outputFile.slice(0, outputFile.length - ext.length);
 
-    // Save images to file if output_file was provided
-    if (outputFile) {
-      const ext = extname(outputFile);
-      const baseName = outputFile.slice(0, outputFile.length - ext.length);
+    for (let i = 0; i < outputImages.length; i++) {
+      const fileName = outputImages.length === 1
+        ? outputFile
+        : `${baseName}_${i + 1}${ext}`;
 
-      for (let i = 0; i < outputImages.length; i++) {
-        const fileName = outputImages.length === 1
-          ? outputFile
-          : `${baseName}_${i + 1}${ext}`;
-
-        try {
-          const buffer = Buffer.from(outputImages[i].data, "base64");
-          writeFileSync(fileName, buffer);
-          console.error(`[FILE_OUTPUT] Successfully saved image to: ${fileName}`);
-          content.push({
-            type: "text",
-            text: `Image saved to: ${fileName}`,
-          });
-        } catch (fileError) {
-          console.error(`[FILE_OUTPUT] Failed to save to ${fileName}: ${fileError.message}`);
-          content.push({
-            type: "text",
-            text: `Failed to save image to '${fileName}': ${fileError.message}`,
-          });
-        }
-      }
-    }
-
-    // Add all images as base64 content
-    for (const outputImage of outputImages) {
-      content.push({
-        type: "image",
-        data: outputImage.data,
-        mimeType: outputImage.mimeType,
+      const buffer = Buffer.from(outputImages[i].data, "base64");
+      writeFileSync(fileName, buffer);
+      console.error(`[FILE_OUTPUT] Successfully saved image to: ${fileName}`);
+      savedFiles.push({
+        path: fileName,
+        mimeType: outputImages[i].mimeType,
+        size: buffer.length,
       });
     }
 
-    // Add any text the model returned alongside the image
+    // Build text-only response with file paths and metadata
+    const lines = [];
+    for (const file of savedFiles) {
+      const sizeKB = (file.size / 1024).toFixed(1);
+      lines.push(`Image saved to: ${file.path} (${sizeKB} KB, ${file.mimeType})`);
+    }
+
     if (textParts.length > 0) {
-      content.push({
-        type: "text",
-        text: textParts.join(""),
-      });
+      lines.push("");
+      lines.push(textParts.join(""));
     }
 
-    return { content };
+    return {
+      content: [
+        {
+          type: "text",
+          text: lines.join("\n"),
+        },
+      ],
+    };
   } catch (error) {
     // MCP-specific error handling with codes
     const errorMessage = error.message || "Image generation failed";

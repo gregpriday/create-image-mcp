@@ -39,7 +39,7 @@ const createImageToolDefinition = {
       },
       output_file: {
         type: "string",
-        description: "File path to save the generated image. Supports both absolute paths (/Users/name/image.png) and relative paths (./output/image.png). If not provided, the image is returned as base64 data only.",
+        description: "File path to save the generated image. Supports both absolute paths (/Users/name/image.png) and relative paths (./output/image.png). The image will be written to this path and the path returned in the response.",
         examples: [
           "./generated-image.png",
           "output/my-image.png",
@@ -83,7 +83,7 @@ const createImageToolDefinition = {
         examples: ["", "ALLOW_ADULT", "DONT_ALLOW"],
       },
     },
-    required: ["prompt"],
+    required: ["prompt", "output_file"],
   },
 };
 
@@ -134,8 +134,8 @@ describe("Input Schema", () => {
     assert.strictEqual(schema.additionalProperties, false);
   });
 
-  it("should require only prompt", () => {
-    assert.deepStrictEqual(schema.required, ["prompt"]);
+  it("should require prompt and output_file", () => {
+    assert.deepStrictEqual(schema.required, ["prompt", "output_file"]);
   });
 
   it("should define all expected properties", () => {

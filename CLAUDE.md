@@ -60,7 +60,7 @@ The server implements a **single-tool MCP server** following the stdio transport
    - Handles `CallToolRequestSchema` for tool execution
    - **Input validation**: null/undefined check → type check → empty string check → length check
    - **Gemini integration**: Uses `@google/genai` SDK with `generateContentStream` for image generation
-   - **Response handling**: Collects streamed image parts and text, returns as MCP image content
+   - **Response handling**: Collects streamed image parts, saves to disk, returns text-only response with file paths
    - **Error categorization**: Maps Gemini errors to MCP-friendly error codes
 
 4. **Process Stability**
@@ -71,23 +71,31 @@ The server implements a **single-tool MCP server** following the stdio transport
 
 **Model**: `gemini-3-pro-image-preview`
 - Configured with `responseModalities: ["IMAGE", "TEXT"]`
-- Supports aspect ratios: 1:1, 16:9, 9:16, 4:3, 3:4
-- Image size: 1K (default)
+- Supports 10 aspect ratios: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3, 5:4, 4:5, 21:9
+- Image sizes: 1K, 2K (default: 2K)
 - Uses streaming API (`generateContentStream`) to handle image data
+- Supports image input for editing/style transfer (PNG, JPEG, WebP, HEIC; max 20MB)
+- Retry with exponential backoff (3 retries, skips auth/quota errors)
 
 ### Tool Parameters
 
-| Parameter | Required | Type | Description |
-|-----------|----------|------|-------------|
-| `prompt` | Yes | string | Image description (1-10,000 chars) |
-| `output_file` | No | string | File path to save the image |
-| `aspect_ratio` | No | enum | One of: 1:1, 16:9, 9:16, 4:3, 3:4 (default: 1:1) |
+| Parameter | Required | Type | Default | Description |
+|-----------|----------|------|---------|-------------|
+| `prompt` | Yes | string | - | Image description or editing instructions (1-10,000 chars) |
+| `output_file` | Yes | string | - | File path to save the generated image |
+| `input_images` | No | array | - | File paths to input images (max 4) |
+| `aspect_ratio` | No | enum | 16:9 | One of 10 valid ratios |
+| `image_size` | No | enum | 2K | 1K or 2K |
+| `number_of_images` | No | integer | 1 | 1-4 variations |
+| `output_mime_type` | No | enum | image/png | image/png or image/jpeg |
+| `person_generation` | No | enum | "" | Controls people in generated images |
 
 ### Response Format
 
-The tool returns MCP content with:
-- `type: "image"` - Base64 encoded image with mimeType
-- `type: "text"` - File save confirmation and/or model text response
+The tool returns **text-only** MCP content:
+- `type: "text"` - File path, size, and mimeType for each saved image
+- Multiple images get numbered filenames (e.g., `output_1.png`, `output_2.png`)
+- No base64 image data in the response (images are saved to disk only)
 
 ## Important Patterns
 

@@ -1,0 +1,59 @@
+{
+  "name": "@gpriday/create-image-mcp",
+  "version": "0.1.0",
+  "description": "A Model Context Protocol (MCP) server that generates images using Gemini's image generation model",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "create-image-mcp": "src/index.js"
+  },
+  "files": [
+    "src/",
+    "scripts/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    ".env.example"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gpriday/create-image-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gpriday/create-image-mcp/issues"
+  },
+  "homepage": "https://github.com/gpriday/create-image-mcp#readme",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/unit/**/*.test.js",
+    "test:integration": "node test/test-create-image-mcp.js",
+    "test:all": "npm test && npm run test:integration",
+    "dev": "node --watch src/index.js",
+    "check-env": "node scripts/check-env.js",
+    "security:audit": "npm audit",
+    "security:fix": "npm audit fix",
+    "security:update": "npm update && npm audit",
+    "prestart": "npm run check-env"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "gemini",
+    "google",
+    "image-generation",
+    "ai",
+    "llm",
+    "claude"
+  ],
+  "author": "Greg Priday <greg@siteorigin.com>",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "dotenv": "^16.6.1",
+    "mime": "^4.0.0"
+  }
+}

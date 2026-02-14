@@ -278,6 +278,8 @@ Edit `~/.config/Claude/claude_desktop_config.json`:
 
 Add an `mcp.json` file to your project root. This is the simplest approach and works automatically when Claude Code opens the project.
 
+> **Note:** If `GOOGLE_API_KEY` is already set in your shell environment (e.g. in `~/.zshrc`, `~/.bashrc`, or `~/.env`), you can omit the `env` field entirely.
+
 **If installed globally:**
 ```json
 {

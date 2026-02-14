@@ -225,10 +225,12 @@ async function runTests() {
       console.log("\n🎨 Test 4: Live image generation...");
       console.log("   (This may take 10-30 seconds...)");
 
+      const outputPath = join(projectRoot, "test", "fixtures", "integration-test-output.png");
       const generateResponse = await sendRequest(serverProcess, "tools/call", {
         name: "create_image",
         arguments: {
           prompt: "A simple red circle on a white background",
+          output_file: outputPath,
           aspect_ratio: "1:1",
           image_size: "1K",
         },
@@ -238,14 +240,18 @@ async function runTests() {
         console.log(`   ⚠️  Generation failed (may be expected): ${generateResponse.error.message}`);
       } else {
         const result = generateResponse.result;
-        const imageContent = result.content.find((c) => c.type === "image");
-        if (imageContent) {
-          console.log(`   ✅ Image generated successfully`);
-          console.log(`   ✅ MIME type: ${imageContent.mimeType}`);
-          console.log(`   ✅ Data length: ${imageContent.data.length} chars (base64)`);
+        const textContent = result.content.find((c) => c.type === "text");
+        if (textContent && textContent.text.includes("Image saved to:")) {
+          console.log(`   ✅ Image generated and saved successfully`);
+          console.log(`   ✅ Response: ${textContent.text.substring(0, 100)}`);
+          // Clean up test output
+          if (existsSync(outputPath)) {
+            const { unlinkSync } = await import("fs");
+            unlinkSync(outputPath);
+            console.log(`   ✅ Cleaned up test output file`);
+          }
         } else {
-          const textContent = result.content.find((c) => c.type === "text");
-          console.log(`   ⚠️  No image returned. Text: ${textContent?.text?.substring(0, 100)}`);
+          console.log(`   ⚠️  Unexpected response: ${textContent?.text?.substring(0, 100)}`);
         }
       }
     } else {

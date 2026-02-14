@@ -1,12 +1,13 @@
 # Create Image MCP Server
 
-A Model Context Protocol (MCP) server that generates and edits images using Google Gemini's image generation model (`gemini-3-pro-image-preview`). This server enables Claude Desktop, Claude Code, and other MCP clients to create images from text descriptions and edit existing images.
+A Model Context Protocol (MCP) server that generates and edits images using OpenAI's GPT Image model (`gpt-image-1.5`). This server enables Claude Desktop, Claude Code, and other MCP clients to create images from text descriptions and edit existing images.
 
 ## Features
 
-- Text-to-image generation via Gemini image model
+- Text-to-image generation via OpenAI GPT Image model
 - Image editing and style transfer with input image support
-- Configurable aspect ratios, resolution, and output format
+- Configurable size, quality, and output format
+- Transparent background support
 - Multiple image variations in a single request
 - Images saved to disk with text-only responses (no base64 bloat)
 - Retry with exponential backoff for transient failures
@@ -14,7 +15,7 @@ A Model Context Protocol (MCP) server that generates and edits images using Goog
 ## Prerequisites
 
 - Node.js >= 20.0.0
-- Google API Key with Gemini API access
+- OpenAI API Key
 
 ## Installation
 
@@ -39,10 +40,10 @@ npm install
 Create a `.env` file in your project root or home directory (`~/.env`):
 
 ```bash
-GOOGLE_API_KEY=your_api_key_here
+OPENAI_API_KEY=your_api_key_here
 ```
 
-You can get a Google API key from [Google AI Studio](https://aistudio.google.com/apikey).
+You can get an OpenAI API key from [OpenAI Platform](https://platform.openai.com/api-keys).
 
 **For local development**, validate your configuration with:
 ```bash
@@ -82,7 +83,7 @@ npm run test:all             # All tests
 
 #### create_image
 
-Generate or edit images using Google Gemini.
+Generate or edit images using OpenAI GPT Image.
 
 **Use when:** user says "create an image", "generate a picture", "draw", "make an illustration", "edit an image", "transform a photo", or any visual content creation request.
 
@@ -90,14 +91,14 @@ Generate or edit images using Google Gemini.
 
 | Parameter | Required | Type | Default | Description |
 |-----------|----------|------|---------|-------------|
-| `prompt` | Yes | string | - | Image description or editing instructions (1-10,000 chars) |
+| `prompt` | Yes | string | - | Image description or editing instructions (1-32,000 chars) |
 | `output_file` | Yes | string | - | File path to save the generated image |
-| `input_images` | No | array | - | File paths to input images for editing (max 4, supports PNG/JPEG/WebP/HEIC, max 20MB each) |
-| `aspect_ratio` | No | enum | `16:9` | `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `5:4`, `4:5`, `21:9` |
-| `image_size` | No | enum | `2K` | `1K` or `2K` |
+| `input_images` | No | array | - | File paths to input images for editing (supports PNG/JPEG/WebP/GIF, max 20MB each) |
+| `size` | No | enum | `1024x1024` | `1024x1024`, `1024x1536`, `1536x1024`, `auto` |
+| `quality` | No | enum | `auto` | `low`, `medium`, `high`, `auto` |
+| `background` | No | enum | `auto` | `transparent`, `opaque`, `auto` |
 | `number_of_images` | No | integer | `1` | Number of variations (1-4) |
-| `output_mime_type` | No | enum | `image/png` | `image/png` or `image/jpeg` |
-| `person_generation` | No | enum | `""` | `""` (default), `DONT_ALLOW`, `ALLOW_ADULT`, `ALLOW_ALL` |
+| `output_mime_type` | No | enum | `image/png` | `image/png`, `image/jpeg`, `image/webp` |
 
 **Examples:**
 
@@ -119,9 +120,21 @@ Generate with specific settings:
   "arguments": {
     "prompt": "A futuristic city skyline with flying cars, cyberpunk style",
     "output_file": "./cyberpunk-city.png",
-    "aspect_ratio": "21:9",
-    "image_size": "2K",
+    "size": "1536x1024",
+    "quality": "high",
     "number_of_images": 2
+  }
+}
+```
+
+Generate with transparent background:
+```json
+{
+  "name": "create_image",
+  "arguments": {
+    "prompt": "A minimalist flat vector logo of an owl",
+    "output_file": "./logo.png",
+    "background": "transparent"
   }
 }
 ```
@@ -178,7 +191,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
     "create-image": {
       "command": "create-image-mcp",
       "env": {
-        "GOOGLE_API_KEY": "your_api_key_here"
+        "OPENAI_API_KEY": "your_api_key_here"
       }
     }
   }
@@ -194,7 +207,7 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json`:
     "create-image": {
       "command": "create-image-mcp",
       "env": {
-        "GOOGLE_API_KEY": "your_api_key_here"
+        "OPENAI_API_KEY": "your_api_key_here"
       }
     }
   }
@@ -210,7 +223,7 @@ Edit `~/.config/Claude/claude_desktop_config.json`:
     "create-image": {
       "command": "create-image-mcp",
       "env": {
-        "GOOGLE_API_KEY": "your_api_key_here"
+        "OPENAI_API_KEY": "your_api_key_here"
       }
     }
   }
@@ -229,7 +242,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
       "command": "node",
       "args": ["/path/to/create-image-mcp/src/index.js"],
       "env": {
-        "GOOGLE_API_KEY": "your_api_key_here"
+        "OPENAI_API_KEY": "your_api_key_here"
       }
     }
   }
@@ -246,7 +259,7 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json`:
       "command": "node",
       "args": ["C:\\path\\to\\create-image-mcp\\src\\index.js"],
       "env": {
-        "GOOGLE_API_KEY": "your_api_key_here"
+        "OPENAI_API_KEY": "your_api_key_here"
       }
     }
   }
@@ -263,7 +276,7 @@ Edit `~/.config/Claude/claude_desktop_config.json`:
       "command": "node",
       "args": ["/path/to/create-image-mcp/src/index.js"],
       "env": {
-        "GOOGLE_API_KEY": "your_api_key_here"
+        "OPENAI_API_KEY": "your_api_key_here"
       }
     }
   }
@@ -278,7 +291,7 @@ Edit `~/.config/Claude/claude_desktop_config.json`:
 
 Add an `mcp.json` file to your project root. This is the simplest approach and works automatically when Claude Code opens the project.
 
-> **Note:** If `GOOGLE_API_KEY` is already set in your shell environment (e.g. in `~/.zshrc`, `~/.bashrc`, or `~/.env`), you can omit the `env` field entirely.
+> **Note:** If `OPENAI_API_KEY` is already set in your shell environment (e.g. in `~/.zshrc`, `~/.bashrc`, or `~/.env`), you can omit the `env` field entirely.
 
 **If installed globally:**
 ```json
@@ -287,7 +300,7 @@ Add an `mcp.json` file to your project root. This is the simplest approach and w
     "create-image": {
       "command": "create-image-mcp",
       "env": {
-        "GOOGLE_API_KEY": "your_api_key_here"
+        "OPENAI_API_KEY": "your_api_key_here"
       }
     }
   }
@@ -302,7 +315,7 @@ Add an `mcp.json` file to your project root. This is the simplest approach and w
       "command": "node",
       "args": ["/path/to/create-image-mcp/src/index.js"],
       "env": {
-        "GOOGLE_API_KEY": "your_api_key_here"
+        "OPENAI_API_KEY": "your_api_key_here"
       }
     }
   }
@@ -313,12 +326,12 @@ Add an `mcp.json` file to your project root. This is the simplest approach and w
 
 **For current project only:**
 ```bash
-claude mcp add --scope project create-image -e GOOGLE_API_KEY=your_api_key_here -- create-image-mcp
+claude mcp add --scope project create-image -e OPENAI_API_KEY=your_api_key_here -- create-image-mcp
 ```
 
 **For your user (available in all projects):**
 ```bash
-claude mcp add --scope user create-image -e GOOGLE_API_KEY=your_api_key_here -- create-image-mcp
+claude mcp add --scope user create-image -e OPENAI_API_KEY=your_api_key_here -- create-image-mcp
 ```
 
 **Verify the server is running:**
@@ -334,12 +347,12 @@ Add the MCP server using the `codex mcp add` command or by editing `~/.codex/con
 
 **If installed globally:**
 ```bash
-codex mcp add create-image --env GOOGLE_API_KEY=your_api_key_here -- create-image-mcp
+codex mcp add create-image --env OPENAI_API_KEY=your_api_key_here -- create-image-mcp
 ```
 
 **If running locally:**
 ```bash
-codex mcp add create-image --env GOOGLE_API_KEY=your_api_key_here -- node /path/to/create-image-mcp/src/index.js
+codex mcp add create-image --env OPENAI_API_KEY=your_api_key_here -- node /path/to/create-image-mcp/src/index.js
 ```
 
 ### Manual Configuration
@@ -349,7 +362,7 @@ Edit `~/.codex/config.toml`:
 ```toml
 [mcp.create-image]
 command = "create-image-mcp"
-env = ["GOOGLE_API_KEY=your_api_key_here"]
+env = ["OPENAI_API_KEY=your_api_key_here"]
 ```
 
 ## Development
@@ -371,7 +384,7 @@ create-image/
 │   └── check-env.js           # Environment validation
 ├── test/
 │   ├── unit/
-│   │   ├── tool-handler.test.js    # Unit tests (93 tests)
+│   │   ├── tool-handler.test.js    # Unit tests
 │   │   └── tool-description.test.js # Schema tests
 │   └── test-create-image-mcp.js    # Integration tests
 ├── package.json
@@ -404,9 +417,9 @@ The server provides categorized error handling:
 
 - **Input Validation**: Parameters validated for presence, type, length, and enum membership
 - **[AUTH_ERROR]**: Missing or invalid API keys
-- **[QUOTA_ERROR]**: API quota or rate limit exceeded
+- **[QUOTA_ERROR]**: API quota, rate limit, or billing errors
 - **[TIMEOUT_ERROR]**: Request timeout errors
-- **[SAFETY_ERROR]**: Content blocked by safety filters
+- **[SAFETY_ERROR]**: Content blocked by safety filters or content policy violations
 - **[API_ERROR]**: General API errors
 - **Retry Logic**: Transient failures retried with exponential backoff (up to 3 attempts)
 - **Process Stability**: Unhandled rejections and exceptions trigger clean shutdown
@@ -423,5 +436,5 @@ Contributions welcome! Please open an issue or PR.
 
 For issues or questions:
 1. Check the [MCP documentation](https://modelcontextprotocol.io)
-2. Review [Google Gemini API docs](https://ai.google.dev/docs)
+2. Review [OpenAI API docs](https://platform.openai.com/docs/api-reference/images)
 3. Open an issue in this repository

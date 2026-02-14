@@ -1,7 +1,7 @@
 {
   "name": "@gpriday/create-image-mcp",
   "version": "0.1.0",
-  "description": "A Model Context Protocol (MCP) server that generates images using Gemini's image generation model",
+  "description": "A Model Context Protocol (MCP) server that generates images using OpenAI's GPT Image model",
   "type": "module",
   "main": "src/index.js",
   "bin": {
@@ -38,8 +38,8 @@
   "keywords": [
     "mcp",
     "model-context-protocol",
-    "gemini",
-    "google",
+    "openai",
+    "gpt-image",
     "image-generation",
     "ai",
     "llm",
@@ -51,9 +51,9 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@google/genai": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.0.4",
     "dotenv": "^16.6.1",
-    "mime": "^4.0.0"
+    "mime": "^4.0.0",
+    "openai": "^4.80.0"
   }
 }

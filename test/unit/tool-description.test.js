@@ -2,15 +2,15 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 
 // Mirror the tool definition from src/index.js for schema validation
-const VALID_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"];
-const VALID_IMAGE_SIZES = ["1K", "2K"];
-const VALID_PERSON_GENERATION = ["", "DONT_ALLOW", "ALLOW_ADULT", "ALLOW_ALL"];
-const VALID_OUTPUT_MIME_TYPES = ["image/png", "image/jpeg"];
+const VALID_SIZES = ["1024x1024", "1024x1536", "1536x1024", "auto"];
+const VALID_QUALITIES = ["low", "medium", "high", "auto"];
+const VALID_BACKGROUNDS = ["transparent", "opaque", "auto"];
+const VALID_OUTPUT_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"];
 
 const createImageToolDefinition = {
   name: "create_image",
   description:
-    "Generate or edit images using Google Gemini. Use when asked to 'create an image', 'generate a picture', 'draw', 'make an illustration', 'edit an image', 'transform a photo', or any visual content creation request. Supports image input for editing and style transfer.",
+    "Generate or edit images using OpenAI GPT Image. Use when asked to 'create an image', 'generate a picture', 'draw', 'make an illustration', 'edit an image', 'transform a photo', or any visual content creation request. Supports image input for editing and style transfer.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -19,7 +19,7 @@ const createImageToolDefinition = {
         type: "string",
         description: "A detailed description of the image to generate, or editing instructions when input images are provided. Be specific about style, composition, colors, mood, and subject matter for best results.",
         minLength: 1,
-        maxLength: 10000,
+        maxLength: 32000,
         examples: [
           "A serene mountain landscape at sunset with golden light",
           "A futuristic city skyline with flying cars, cyberpunk style",
@@ -29,9 +29,8 @@ const createImageToolDefinition = {
       },
       input_images: {
         type: "array",
-        description: "File paths to input images for editing or style reference. Supports PNG, JPEG, WebP, and HEIC formats. Max 20MB per image. When provided, the prompt should describe how to modify or use these images.",
+        description: "File paths to input images for editing or style reference. Supports PNG, JPEG, WebP, and GIF formats. Max 20MB per image. When provided, the prompt should describe how to modify or use these images.",
         items: { type: "string" },
-        maxItems: 4,
         examples: [
           ["./photo.jpg"],
           ["./source.png", "./style-reference.jpg"],
@@ -46,19 +45,26 @@ const createImageToolDefinition = {
           "/Users/john/Documents/image.png",
         ],
       },
-      aspect_ratio: {
+      size: {
         type: "string",
-        description: "Aspect ratio of the generated image.",
-        enum: VALID_ASPECT_RATIOS,
-        default: "16:9",
-        examples: ["16:9", "1:1", "9:16", "3:2", "21:9"],
+        description: "Size of the generated image. '1024x1024' for square, '1024x1536' for portrait, '1536x1024' for landscape, or 'auto' to let the model decide.",
+        enum: VALID_SIZES,
+        default: "1024x1024",
+        examples: ["1024x1024", "1024x1536", "1536x1024", "auto"],
       },
-      image_size: {
+      quality: {
         type: "string",
-        description: "Resolution of the generated image. '2K' produces higher quality output.",
-        enum: VALID_IMAGE_SIZES,
-        default: "2K",
-        examples: ["2K", "1K"],
+        description: "Quality of the generated image. 'high' produces the most detailed output, 'medium' balances quality and speed, 'low' is fastest, 'auto' lets the model decide.",
+        enum: VALID_QUALITIES,
+        default: "auto",
+        examples: ["auto", "high", "medium", "low"],
+      },
+      background: {
+        type: "string",
+        description: "Background style for the generated image. 'transparent' generates images with a transparent background (requires PNG or WebP output), 'opaque' forces a solid background, 'auto' lets the model decide.",
+        enum: VALID_BACKGROUNDS,
+        default: "auto",
+        examples: ["auto", "transparent", "opaque"],
       },
       number_of_images: {
         type: "integer",
@@ -73,14 +79,15 @@ const createImageToolDefinition = {
         description: "Output image format.",
         enum: VALID_OUTPUT_MIME_TYPES,
         default: "image/png",
-        examples: ["image/png", "image/jpeg"],
+        examples: ["image/png", "image/jpeg", "image/webp"],
       },
-      person_generation: {
+      system_message_file: {
         type: "string",
-        description: "Controls whether people can appear in generated images. Empty string uses model default, 'DONT_ALLOW' blocks people, 'ALLOW_ADULT' allows adult faces, 'ALLOW_ALL' allows all people including children.",
-        enum: VALID_PERSON_GENERATION,
-        default: "",
-        examples: ["", "ALLOW_ADULT", "DONT_ALLOW"],
+        description: "File path to a text file containing system-level instructions. The file contents are prepended to the prompt (truncated to 4000 chars). Use for persistent style guidelines, brand constraints, or negative constraints. Since the OpenAI images API does not support a native system role, the content is prepended to the prompt.",
+        examples: [
+          "./system-prompt.txt",
+          "/Users/john/brand-guidelines.txt",
+        ],
       },
     },
     required: ["prompt", "output_file"],
@@ -140,8 +147,8 @@ describe("Input Schema", () => {
 
   it("should define all expected properties", () => {
     const expectedProps = [
-      "prompt", "input_images", "output_file", "aspect_ratio",
-      "image_size", "number_of_images", "output_mime_type", "person_generation",
+      "prompt", "input_images", "output_file", "size",
+      "quality", "background", "number_of_images", "output_mime_type", "system_message_file",
     ];
     for (const prop of expectedProps) {
       assert.ok(schema.properties[prop], `Missing property: ${prop}`);
@@ -150,8 +157,8 @@ describe("Input Schema", () => {
 
   it("should not have unexpected properties", () => {
     const expectedProps = [
-      "prompt", "input_images", "output_file", "aspect_ratio",
-      "image_size", "number_of_images", "output_mime_type", "person_generation",
+      "prompt", "input_images", "output_file", "size",
+      "quality", "background", "number_of_images", "output_mime_type", "system_message_file",
     ];
     const actualProps = Object.keys(schema.properties);
     for (const prop of actualProps) {
@@ -173,8 +180,8 @@ describe("Prompt Property", () => {
     assert.strictEqual(prompt.minLength, 1);
   });
 
-  it("should have maxLength of 10000", () => {
-    assert.strictEqual(prompt.maxLength, 10000);
+  it("should have maxLength of 32000", () => {
+    assert.strictEqual(prompt.maxLength, 32000);
   });
 
   it("should have examples", () => {
@@ -205,15 +212,15 @@ describe("Input Images Property", () => {
     assert.strictEqual(inputImages.items.type, "string");
   });
 
-  it("should limit to 4 items", () => {
-    assert.strictEqual(inputImages.maxItems, 4);
+  it("should not impose a maxItems limit", () => {
+    assert.strictEqual(inputImages.maxItems, undefined);
   });
 
   it("should mention supported formats in description", () => {
     assert.ok(inputImages.description.includes("PNG"));
     assert.ok(inputImages.description.includes("JPEG"));
     assert.ok(inputImages.description.includes("WebP"));
-    assert.ok(inputImages.description.includes("HEIC"));
+    assert.ok(inputImages.description.includes("GIF"));
   });
 
   it("should mention size limit", () => {
@@ -221,18 +228,52 @@ describe("Input Images Property", () => {
   });
 });
 
-// ─── Aspect Ratio Property Tests ───
+// ─── Size Property Tests ───
 
-describe("Aspect Ratio Property", () => {
-  const ar = createImageToolDefinition.inputSchema.properties.aspect_ratio;
+describe("Size Property", () => {
+  const size = createImageToolDefinition.inputSchema.properties.size;
 
-  it("should have all 10 valid ratios", () => {
-    assert.strictEqual(ar.enum.length, 10);
-    assert.deepStrictEqual(ar.enum, VALID_ASPECT_RATIOS);
+  it("should have all 4 valid sizes", () => {
+    assert.strictEqual(size.enum.length, 4);
+    assert.deepStrictEqual(size.enum, VALID_SIZES);
   });
 
-  it("should default to 16:9", () => {
-    assert.strictEqual(ar.default, "16:9");
+  it("should default to 1024x1024", () => {
+    assert.strictEqual(size.default, "1024x1024");
+  });
+});
+
+// ─── Quality Property Tests ───
+
+describe("Quality Property", () => {
+  const quality = createImageToolDefinition.inputSchema.properties.quality;
+
+  it("should have all 4 valid qualities", () => {
+    assert.strictEqual(quality.enum.length, 4);
+    assert.deepStrictEqual(quality.enum, VALID_QUALITIES);
+  });
+
+  it("should default to auto", () => {
+    assert.strictEqual(quality.default, "auto");
+  });
+});
+
+// ─── Background Property Tests ───
+
+describe("Background Property", () => {
+  const bg = createImageToolDefinition.inputSchema.properties.background;
+
+  it("should have all 3 valid backgrounds", () => {
+    assert.strictEqual(bg.enum.length, 3);
+    assert.deepStrictEqual(bg.enum, VALID_BACKGROUNDS);
+  });
+
+  it("should default to auto", () => {
+    assert.strictEqual(bg.default, "auto");
+  });
+
+  it("should mention transparency in description", () => {
+    assert.ok(bg.description.includes("transparent"));
   });
 });
 
@@ -263,8 +304,8 @@ describe("Number of Images Property", () => {
 describe("Output MIME Type Property", () => {
   const omt = createImageToolDefinition.inputSchema.properties.output_mime_type;
 
-  it("should have png and jpeg options", () => {
-    assert.deepStrictEqual(omt.enum, ["image/png", "image/jpeg"]);
+  it("should have png, jpeg, and webp options", () => {
+    assert.deepStrictEqual(omt.enum, ["image/png", "image/jpeg", "image/webp"]);
   });
 
   it("should default to image/png", () => {

@@ -6,11 +6,11 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { GoogleGenAI } from "@google/genai";
+import OpenAI, { toFile } from "openai";
 import { config } from "dotenv";
-import { readFileSync, writeFileSync, existsSync, statSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "fs";
 import { fileURLToPath } from "url";
-import { dirname, join, extname } from "path";
+import { dirname, join, extname, basename } from "path";
 import { homedir } from "os";
 import mime from "mime";
 
@@ -26,22 +26,22 @@ const packageJson = JSON.parse(
   readFileSync(join(__dirname, "..", "package.json"), "utf-8")
 );
 
-// Initialize Gemini AI client
-const apiKey = process.env.GOOGLE_API_KEY;
+// Initialize OpenAI client
+const apiKey = process.env.OPENAI_API_KEY;
 if (!apiKey) {
-  throw new Error("GOOGLE_API_KEY environment variable is required");
+  throw new Error("OPENAI_API_KEY environment variable is required");
 }
 
-const ai = new GoogleGenAI({ apiKey });
+const openai = new OpenAI({ apiKey });
 
 // Image generation model
-const IMAGE_MODEL = "gemini-3-pro-image-preview";
+const IMAGE_MODEL = "gpt-image-1.5";
 
 // Max input image size (20MB)
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024;
 
 // Supported input image mime types
-const SUPPORTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/heic"];
+const SUPPORTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
 // Retry configuration
 const MAX_RETRIES = 3;
@@ -67,10 +67,14 @@ async function retryWithBackoff(fn, maxRetries = MAX_RETRIES, initialDelay = INI
       const errorMessage = error.message || "";
       const lowerMessage = errorMessage.toLowerCase();
 
-      // Don't retry auth errors or quota errors (permanent failures)
+      // Don't retry auth errors, quota errors, or content policy violations
       if (lowerMessage.includes("api key") ||
+          lowerMessage.includes("authentication") ||
+          lowerMessage.includes("unauthorized") ||
           lowerMessage.includes("quota") ||
-          lowerMessage.includes("rate limit")) {
+          lowerMessage.includes("rate limit") ||
+          lowerMessage.includes("billing") ||
+          lowerMessage.includes("content_policy")) {
         throw error;
       }
 
@@ -92,9 +96,9 @@ async function retryWithBackoff(fn, maxRetries = MAX_RETRIES, initialDelay = INI
 }
 
 /**
- * Read an image file and return its base64 data and mime type
+ * Read an image file and return its buffer and mime type
  * @param {string} filePath - Path to the image file
- * @returns {{ data: string, mimeType: string }} Base64 data and mime type
+ * @returns {{ data: Buffer, mimeType: string }} Buffer and mime type
  */
 function readImageFile(filePath) {
   if (!existsSync(filePath)) {
@@ -113,7 +117,7 @@ function readImageFile(filePath) {
 
   const data = readFileSync(filePath);
   return {
-    data: data.toString("base64"),
+    data,
     mimeType,
   };
 }
@@ -132,10 +136,10 @@ const server = new Server(
 );
 
 // Valid configuration options
-const VALID_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"];
-const VALID_IMAGE_SIZES = ["1K", "2K"];
-const VALID_PERSON_GENERATION = ["", "DONT_ALLOW", "ALLOW_ADULT", "ALLOW_ALL"];
-const VALID_OUTPUT_MIME_TYPES = ["image/png", "image/jpeg"];
+const VALID_SIZES = ["1024x1024", "1024x1536", "1536x1024", "auto"];
+const VALID_QUALITIES = ["low", "medium", "high", "auto"];
+const VALID_BACKGROUNDS = ["transparent", "opaque", "auto"];
+const VALID_OUTPUT_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"];
 
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -144,7 +148,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "create_image",
         description:
-          "Generate or edit images using Google Gemini. Use when asked to 'create an image', 'generate a picture', 'draw', 'make an illustration', 'edit an image', 'transform a photo', or any visual content creation request. Supports image input for editing and style transfer.",
+          "Generate or edit images using OpenAI GPT Image. Use when asked to 'create an image', 'generate a picture', 'draw', 'make an illustration', 'edit an image', 'transform a photo', or any visual content creation request. Supports image input for editing and style transfer.",
         inputSchema: {
           type: "object",
           additionalProperties: false,
@@ -153,7 +157,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "A detailed description of the image to generate, or editing instructions when input images are provided. Be specific about style, composition, colors, mood, and subject matter for best results.",
               minLength: 1,
-              maxLength: 10000,
+              maxLength: 32000,
               examples: [
                 "A serene mountain landscape at sunset with golden light",
                 "A futuristic city skyline with flying cars, cyberpunk style",
@@ -163,11 +167,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             input_images: {
               type: "array",
-              description: "File paths to input images for editing or style reference. Supports PNG, JPEG, WebP, and HEIC formats. Max 20MB per image. When provided, the prompt should describe how to modify or use these images.",
+              description: "File paths to input images for editing or style reference. Supports PNG, JPEG, WebP, and GIF formats. Max 20MB per image. When provided, the prompt should describe how to modify or use these images.",
               items: {
                 type: "string",
               },
-              maxItems: 4,
               examples: [
                 ["./photo.jpg"],
                 ["./source.png", "./style-reference.jpg"],
@@ -182,19 +185,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 "/Users/john/Documents/image.png",
               ],
             },
-            aspect_ratio: {
+            size: {
               type: "string",
-              description: "Aspect ratio of the generated image.",
-              enum: VALID_ASPECT_RATIOS,
-              default: "16:9",
-              examples: ["16:9", "1:1", "9:16", "3:2", "21:9"],
+              description: "Size of the generated image. '1024x1024' for square, '1024x1536' for portrait, '1536x1024' for landscape, or 'auto' to let the model decide.",
+              enum: VALID_SIZES,
+              default: "1024x1024",
+              examples: ["1024x1024", "1024x1536", "1536x1024", "auto"],
             },
-            image_size: {
+            quality: {
               type: "string",
-              description: "Resolution of the generated image. '2K' produces higher quality output.",
-              enum: VALID_IMAGE_SIZES,
-              default: "2K",
-              examples: ["2K", "1K"],
+              description: "Quality of the generated image. 'high' produces the most detailed output, 'medium' balances quality and speed, 'low' is fastest, 'auto' lets the model decide.",
+              enum: VALID_QUALITIES,
+              default: "auto",
+              examples: ["auto", "high", "medium", "low"],
+            },
+            background: {
+              type: "string",
+              description: "Background style for the generated image. 'transparent' generates images with a transparent background (requires PNG or WebP output), 'opaque' forces a solid background, 'auto' lets the model decide.",
+              enum: VALID_BACKGROUNDS,
+              default: "auto",
+              examples: ["auto", "transparent", "opaque"],
             },
             number_of_images: {
               type: "integer",
@@ -209,14 +219,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: "Output image format.",
               enum: VALID_OUTPUT_MIME_TYPES,
               default: "image/png",
-              examples: ["image/png", "image/jpeg"],
+              examples: ["image/png", "image/jpeg", "image/webp"],
             },
-            person_generation: {
+            system_message_file: {
               type: "string",
-              description: "Controls whether people can appear in generated images. Empty string uses model default, 'DONT_ALLOW' blocks people, 'ALLOW_ADULT' allows adult faces, 'ALLOW_ALL' allows all people including children.",
-              enum: VALID_PERSON_GENERATION,
-              default: "",
-              examples: ["", "ALLOW_ADULT", "DONT_ALLOW"],
+              description: "File path to a text file containing system-level instructions. The file contents are prepended to the prompt (truncated to 4000 chars). Use for persistent style guidelines, brand constraints, or negative constraints. Since the OpenAI images API does not support a native system role, the content is prepended to the prompt.",
+              examples: [
+                "./system-prompt.txt",
+                "/Users/john/brand-guidelines.txt",
+              ],
             },
           },
           required: ["prompt", "output_file"],
@@ -235,11 +246,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const prompt = request.params.arguments?.prompt;
   const inputImages = request.params.arguments?.input_images;
   const outputFile = request.params.arguments?.output_file;
-  const aspectRatio = request.params.arguments?.aspect_ratio || "16:9";
-  const imageSize = request.params.arguments?.image_size || "2K";
+  const size = request.params.arguments?.size || "1024x1024";
+  const quality = request.params.arguments?.quality || "auto";
+  const background = request.params.arguments?.background || "auto";
   const numberOfImages = request.params.arguments?.number_of_images || 1;
   const outputMimeType = request.params.arguments?.output_mime_type || "image/png";
-  const personGeneration = request.params.arguments?.person_generation ?? "";
+  const systemMessageFile = request.params.arguments?.system_message_file;
 
   // Input validation for prompt
   if (!prompt) {
@@ -254,8 +266,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     throw new Error("Prompt cannot be empty");
   }
 
-  if (prompt.length > 10000) {
-    throw new Error("Prompt exceeds maximum length of 10000 characters");
+  if (prompt.length > 32000) {
+    throw new Error("Prompt exceeds maximum length of 32000 characters");
   }
 
   // Input validation for input_images (if provided)
@@ -268,14 +280,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       throw new Error("input_images cannot be an empty array");
     }
 
-    if (inputImages.length > 4) {
-      throw new Error("input_images cannot contain more than 4 images");
-    }
-
     for (const imgPath of inputImages) {
       if (typeof imgPath !== "string" || imgPath.trim().length === 0) {
         throw new Error("Each input_images entry must be a non-empty string file path");
       }
+    }
+  }
+
+  // Input validation for system_message_file (if provided)
+  let systemMessage = null;
+  if (systemMessageFile !== undefined && systemMessageFile !== null) {
+    if (typeof systemMessageFile !== "string") {
+      throw new Error("system_message_file must be a string");
+    }
+    if (systemMessageFile.trim().length === 0) {
+      throw new Error("system_message_file cannot be empty");
+    }
+    if (!existsSync(systemMessageFile)) {
+      throw new Error(`System message file not found: ${systemMessageFile}`);
+    }
+    systemMessage = readFileSync(systemMessageFile, "utf-8");
+    if (systemMessage.length > 4000) {
+      systemMessage = systemMessage.slice(0, 4000);
     }
   }
 
@@ -292,14 +318,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     throw new Error("output_file cannot be empty");
   }
 
-  // Input validation for aspect_ratio
-  if (!VALID_ASPECT_RATIOS.includes(aspectRatio)) {
-    throw new Error(`aspect_ratio must be one of: ${VALID_ASPECT_RATIOS.join(", ")}. Got: ${aspectRatio}`);
+  // Input validation for size
+  if (!VALID_SIZES.includes(size)) {
+    throw new Error(`size must be one of: ${VALID_SIZES.join(", ")}. Got: ${size}`);
   }
 
-  // Input validation for image_size
-  if (!VALID_IMAGE_SIZES.includes(imageSize)) {
-    throw new Error(`image_size must be one of: ${VALID_IMAGE_SIZES.join(", ")}. Got: ${imageSize}`);
+  // Input validation for quality
+  if (!VALID_QUALITIES.includes(quality)) {
+    throw new Error(`quality must be one of: ${VALID_QUALITIES.join(", ")}. Got: ${quality}`);
+  }
+
+  // Input validation for background
+  if (!VALID_BACKGROUNDS.includes(background)) {
+    throw new Error(`background must be one of: ${VALID_BACKGROUNDS.join(", ")}. Got: ${background}`);
   }
 
   // Input validation for number_of_images
@@ -312,89 +343,77 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     throw new Error(`output_mime_type must be one of: ${VALID_OUTPUT_MIME_TYPES.join(", ")}. Got: ${outputMimeType}`);
   }
 
-  // Input validation for person_generation
-  if (!VALID_PERSON_GENERATION.includes(personGeneration)) {
-    throw new Error(`person_generation must be one of: ${VALID_PERSON_GENERATION.join(", ")}. Got: ${personGeneration}`);
-  }
-
   try {
-    // Read input images if provided
-    const imageParts = [];
-    if (inputImages && inputImages.length > 0) {
+    // Map output_mime_type to OpenAI output_format
+    const outputFormatMap = {
+      "image/png": "png",
+      "image/jpeg": "jpeg",
+      "image/webp": "webp",
+    };
+    const outputFormat = outputFormatMap[outputMimeType];
+
+    // Prepend system message to prompt if provided
+    // (OpenAI images API does not support a native system role)
+    const effectivePrompt = systemMessage && systemMessage.trim().length > 0
+      ? `${systemMessage.trim()}\n\n${prompt}`
+      : prompt;
+
+    const hasInputImages = inputImages && inputImages.length > 0;
+
+    // Read and prepare input images if provided
+    let imageFiles = [];
+    if (hasInputImages) {
       for (const imgPath of inputImages) {
         const imageData = readImageFile(imgPath);
-        imageParts.push({
-          inlineData: {
-            mimeType: imageData.mimeType,
-            data: imageData.data,
-          },
-        });
+        const file = await toFile(imageData.data, basename(imgPath), { type: imageData.mimeType });
+        imageFiles.push(file);
       }
     }
 
-    const generationConfig = {
-      responseModalities: ["IMAGE", "TEXT"],
-      imageConfig: {
-        aspectRatio: aspectRatio,
-        imageSize: imageSize,
-        personGeneration: personGeneration,
-        numberOfImages: numberOfImages,
-        outputMimeType: outputMimeType,
-      },
-      tools: [{ googleSearch: {} }],
-    };
+    // Generate images
+    const outputImages = [];
 
-    // Build content parts: text prompt + any input images
-    const parts = [{ text: prompt }, ...imageParts];
-
-    const contents = [
-      {
-        role: "user",
-        parts,
-      },
-    ];
-
-    // Generate image with retry logic
     const result = await retryWithBackoff(async () => {
-      const response = await ai.models.generateContentStream({
-        model: IMAGE_MODEL,
-        config: generationConfig,
-        contents,
-      });
-
-      // Collect all parts from the stream
-      const outputImages = [];
-      const textParts = [];
-
-      for await (const chunk of response) {
-        if (!chunk.candidates || !chunk.candidates[0]?.content?.parts) {
-          continue;
-        }
-
-        for (const part of chunk.candidates[0].content.parts) {
-          if (part.inlineData) {
-            outputImages.push({
-              mimeType: part.inlineData.mimeType || "image/png",
-              data: part.inlineData.data,
-            });
-          } else if (part.text) {
-            textParts.push(part.text);
-          }
-        }
+      if (hasInputImages) {
+        // Use edit endpoint for image editing
+        return await openai.images.edit({
+          model: IMAGE_MODEL,
+          image: imageFiles.length === 1 ? imageFiles[0] : imageFiles,
+          prompt: effectivePrompt,
+          size,
+          n: numberOfImages,
+        });
+      } else {
+        // Use generate endpoint for text-to-image
+        return await openai.images.generate({
+          model: IMAGE_MODEL,
+          prompt: effectivePrompt,
+          size,
+          quality,
+          background,
+          output_format: outputFormat,
+          n: numberOfImages,
+        });
       }
-
-      return { outputImages, textParts };
     });
 
-    const { outputImages, textParts } = result;
+    if (result.data) {
+      for (const entry of result.data) {
+        if (entry.b64_json) {
+          outputImages.push({
+            data: entry.b64_json,
+            mimeType: outputMimeType,
+          });
+        }
+      }
+    }
 
     if (outputImages.length === 0) {
-      const textResponse = textParts.join("") || "No image was generated. The model may have declined the request.";
       return {
         content: [
           {
             type: "text",
-            text: `[NO_IMAGE] ${textResponse}`,
+            text: "[NO_IMAGE] No image was generated. The model may have declined the request.",
           },
         ],
       };
@@ -404,6 +423,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const savedFiles = [];
     const ext = extname(outputFile);
     const baseName = outputFile.slice(0, outputFile.length - ext.length);
+    const outputDir = dirname(outputFile);
+    if (outputDir && !existsSync(outputDir)) {
+      mkdirSync(outputDir, { recursive: true });
+    }
 
     for (let i = 0; i < outputImages.length; i++) {
       const fileName = outputImages.length === 1
@@ -427,11 +450,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       lines.push(`Image saved to: ${file.path} (${sizeKB} KB, ${file.mimeType})`);
     }
 
-    if (textParts.length > 0) {
-      lines.push("");
-      lines.push(textParts.join(""));
-    }
-
     return {
       content: [
         {
@@ -446,16 +464,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const lowerMessage = errorMessage.toLowerCase();
 
     // Categorize errors (case-insensitive)
-    if (lowerMessage.includes("api key")) {
+    if (lowerMessage.includes("api key") || lowerMessage.includes("authentication") || lowerMessage.includes("unauthorized")) {
       throw new Error(`[AUTH_ERROR] Invalid or missing API key: ${errorMessage}`);
-    } else if (lowerMessage.includes("quota") || lowerMessage.includes("rate limit")) {
+    } else if (lowerMessage.includes("quota") || lowerMessage.includes("rate limit") || lowerMessage.includes("billing")) {
       throw new Error(`[QUOTA_ERROR] API quota exceeded: ${errorMessage}`);
     } else if (lowerMessage.includes("timeout")) {
       throw new Error(`[TIMEOUT_ERROR] Request timed out: ${errorMessage}`);
-    } else if (lowerMessage.includes("safety") || lowerMessage.includes("blocked")) {
+    } else if (lowerMessage.includes("safety") || lowerMessage.includes("blocked") || lowerMessage.includes("content_policy")) {
       throw new Error(`[SAFETY_ERROR] Request blocked by safety filters: ${errorMessage}`);
     } else {
-      throw new Error(`[API_ERROR] Gemini API error: ${errorMessage}`);
+      throw new Error(`[API_ERROR] OpenAI API error: ${errorMessage}`);
     }
   }
 });
@@ -464,9 +482,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 export {
   retryWithBackoff,
   readImageFile,
-  VALID_ASPECT_RATIOS,
-  VALID_IMAGE_SIZES,
-  VALID_PERSON_GENERATION,
+  VALID_SIZES,
+  VALID_QUALITIES,
+  VALID_BACKGROUNDS,
   VALID_OUTPUT_MIME_TYPES,
   SUPPORTED_IMAGE_TYPES,
   MAX_IMAGE_SIZE,

@@ -9,7 +9,7 @@
  * 3. List tools
  * 4. Validate tool schema
  *
- * Note: Actual image generation requires GOOGLE_API_KEY and is optional.
+ * Note: Actual image generation requires OPENAI_API_KEY and is optional.
  * Run with: npm run test:integration
  */
 
@@ -102,16 +102,16 @@ async function runTests() {
   console.log("=".repeat(60));
 
   // Check if we have an API key for live tests
-  const hasApiKey = !!process.env.GOOGLE_API_KEY && process.env.GOOGLE_API_KEY !== "test-key-for-testing";
+  const hasApiKey = !!process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== "test-key-for-testing";
   if (!hasApiKey) {
-    console.log("\n⚠️  GOOGLE_API_KEY not set. Skipping live API tests.");
-    console.log("   Set GOOGLE_API_KEY to run full integration tests.\n");
+    console.log("\n⚠️  OPENAI_API_KEY not set. Skipping live API tests.");
+    console.log("   Set OPENAI_API_KEY to run full integration tests.\n");
   }
 
   // Start the server
   console.log("\n🚀 Starting MCP server...");
   const serverProcess = spawn("node", [join(projectRoot, "src", "index.js")], {
-    env: { ...process.env, GOOGLE_API_KEY: process.env.GOOGLE_API_KEY || "test-key-for-startup" },
+    env: { ...process.env, OPENAI_API_KEY: process.env.OPENAI_API_KEY || "test-key-for-startup" },
     stdio: ["pipe", "pipe", "pipe"],
   });
 
@@ -166,8 +166,8 @@ async function runTests() {
     // Validate schema
     const props = createImageTool.inputSchema.properties;
     const expectedProps = [
-      "prompt", "input_images", "output_file", "aspect_ratio",
-      "image_size", "number_of_images", "output_mime_type", "person_generation",
+      "prompt", "input_images", "output_file", "size",
+      "quality", "background", "number_of_images", "output_mime_type", "system_message_file",
     ];
 
     for (const prop of expectedProps) {
@@ -175,23 +175,23 @@ async function runTests() {
         throw new Error(`Missing property in schema: ${prop}`);
       }
     }
-    console.log(`   ✅ All ${expectedProps.length} properties present in schema`);
+    console.log(`   ✅ All ${expectedProps.length} properties present in schema (including system_message_file)`);
 
     // Validate enums
-    if (props.aspect_ratio.enum.length !== 10) {
-      throw new Error(`Expected 10 aspect ratios, got ${props.aspect_ratio.enum.length}`);
+    if (props.size.enum.length !== 4) {
+      throw new Error(`Expected 4 sizes, got ${props.size.enum.length}`);
     }
-    console.log(`   ✅ ${props.aspect_ratio.enum.length} aspect ratios defined`);
+    console.log(`   ✅ ${props.size.enum.length} sizes defined`);
 
-    if (props.aspect_ratio.default !== "16:9") {
-      throw new Error(`Expected default aspect ratio 16:9, got ${props.aspect_ratio.default}`);
+    if (props.size.default !== "1024x1024") {
+      throw new Error(`Expected default size 1024x1024, got ${props.size.default}`);
     }
-    console.log(`   ✅ Default aspect ratio is 16:9`);
+    console.log(`   ✅ Default size is 1024x1024`);
 
-    if (props.image_size.default !== "2K") {
-      throw new Error(`Expected default image size 2K, got ${props.image_size.default}`);
+    if (props.quality.default !== "auto") {
+      throw new Error(`Expected default quality auto, got ${props.quality.default}`);
     }
-    console.log(`   ✅ Default image size is 2K`);
+    console.log(`   ✅ Default quality is auto`);
 
     if (props.number_of_images.default !== 1) {
       throw new Error(`Expected default number_of_images 1, got ${props.number_of_images.default}`);
@@ -231,8 +231,8 @@ async function runTests() {
         arguments: {
           prompt: "A simple red circle on a white background",
           output_file: outputPath,
-          aspect_ratio: "1:1",
-          image_size: "1K",
+          size: "1024x1024",
+          quality: "low",
         },
       });
 

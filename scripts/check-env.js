@@ -15,9 +15,9 @@ const projectRoot = join(__dirname, "..");
 
 const REQUIRED_ENV_VARS = [
   {
-    name: "GOOGLE_API_KEY",
-    description: "Google API key for Gemini API access (image generation)",
-    remediation: "Get your API key from: https://aistudio.google.com/apikey",
+    name: "OPENAI_API_KEY",
+    description: "OpenAI API key for GPT Image generation",
+    remediation: "Get your API key from: https://platform.openai.com/api-keys",
     validator: (value) => {
       if (!value || value === "your_api_key_here") {
         return "API key appears to be a placeholder value";

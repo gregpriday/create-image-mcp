@@ -6,6 +6,7 @@ const VALID_SIZES = ["1024x1024", "1024x1536", "1536x1024", "auto"];
 const VALID_QUALITIES = ["low", "medium", "high", "auto"];
 const VALID_BACKGROUNDS = ["transparent", "opaque", "auto"];
 const VALID_OUTPUT_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"];
+const VALID_INPUT_FIDELITIES = ["high", "low"];
 
 const createImageToolDefinition = {
   name: "create_image",
@@ -68,7 +69,7 @@ const createImageToolDefinition = {
       },
       number_of_images: {
         type: "integer",
-        description: "Number of image variations to generate (1-4).",
+        description: "Number of image variations to generate (1-4). Multiple images are saved with numbered filenames (e.g., output_1.png, output_2.png).",
         minimum: 1,
         maximum: 4,
         default: 1,
@@ -76,7 +77,7 @@ const createImageToolDefinition = {
       },
       output_mime_type: {
         type: "string",
-        description: "Output image format.",
+        description: "Output image format. 'image/png' supports transparency, 'image/jpeg' for smaller file sizes, 'image/webp' for modern web use.",
         enum: VALID_OUTPUT_MIME_TYPES,
         default: "image/png",
         examples: ["image/png", "image/jpeg", "image/webp"],
@@ -88,6 +89,20 @@ const createImageToolDefinition = {
           "./system-prompt.txt",
           "/Users/john/brand-guidelines.txt",
         ],
+      },
+      mask: {
+        type: "string",
+        description: "File path to a PNG image with an alpha channel to use as a mask for targeted inpainting. Transparent areas of the mask indicate where the image should be edited. Only used with the edit endpoint (when input_images is provided).",
+        examples: [
+          "./mask.png",
+          "/Users/john/Documents/mask.png",
+        ],
+      },
+      input_fidelity: {
+        type: "string",
+        description: "Controls how strictly the output image preserves the original input image details. 'high' preserves more details, 'low' allows more creative freedom. Only used with the edit endpoint (when input_images is provided).",
+        enum: VALID_INPUT_FIDELITIES,
+        examples: ["high", "low"],
       },
     },
     required: ["prompt", "output_file"],
@@ -149,6 +164,7 @@ describe("Input Schema", () => {
     const expectedProps = [
       "prompt", "input_images", "output_file", "size",
       "quality", "background", "number_of_images", "output_mime_type", "system_message_file",
+      "mask", "input_fidelity",
     ];
     for (const prop of expectedProps) {
       assert.ok(schema.properties[prop], `Missing property: ${prop}`);
@@ -159,6 +175,7 @@ describe("Input Schema", () => {
     const expectedProps = [
       "prompt", "input_images", "output_file", "size",
       "quality", "background", "number_of_images", "output_mime_type", "system_message_file",
+      "mask", "input_fidelity",
     ];
     const actualProps = Object.keys(schema.properties);
     for (const prop of actualProps) {
@@ -310,6 +327,53 @@ describe("Output MIME Type Property", () => {
 
   it("should default to image/png", () => {
     assert.strictEqual(omt.default, "image/png");
+  });
+});
+
+// ─── Mask Property Tests ───
+
+describe("Mask Property", () => {
+  const mask = createImageToolDefinition.inputSchema.properties.mask;
+
+  it("should be a string type", () => {
+    assert.strictEqual(mask.type, "string");
+  });
+
+  it("should mention alpha channel in description", () => {
+    assert.ok(mask.description.includes("alpha channel"));
+  });
+
+  it("should mention inpainting in description", () => {
+    assert.ok(mask.description.includes("inpainting"));
+  });
+
+  it("should have examples", () => {
+    assert.ok(Array.isArray(mask.examples));
+    assert.ok(mask.examples.length >= 1);
+  });
+});
+
+// ─── Input Fidelity Property Tests ───
+
+describe("Input Fidelity Property", () => {
+  const fidelity = createImageToolDefinition.inputSchema.properties.input_fidelity;
+
+  it("should be a string type", () => {
+    assert.strictEqual(fidelity.type, "string");
+  });
+
+  it("should have high and low enum values", () => {
+    assert.deepStrictEqual(fidelity.enum, VALID_INPUT_FIDELITIES);
+    assert.strictEqual(fidelity.enum.length, 2);
+  });
+
+  it("should not have a default value", () => {
+    assert.strictEqual(fidelity.default, undefined);
+  });
+
+  it("should have examples", () => {
+    assert.ok(Array.isArray(fidelity.examples));
+    assert.ok(fidelity.examples.length >= 1);
   });
 });
 

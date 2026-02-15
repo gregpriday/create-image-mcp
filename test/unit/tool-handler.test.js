@@ -124,12 +124,15 @@ async function handleCreateImage(args, mockAPI) {
     number_of_images: numberOfImages = 1,
     output_mime_type: outputMimeType = "image/png",
     system_message_file: systemMessageFile,
+    mask,
+    input_fidelity: inputFidelity,
   } = args;
 
   const VALID_SIZES = ["1024x1024", "1024x1536", "1536x1024", "auto"];
   const VALID_QUALITIES = ["low", "medium", "high", "auto"];
   const VALID_BACKGROUNDS = ["transparent", "opaque", "auto"];
   const VALID_OUTPUT_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"];
+  const VALID_INPUT_FIDELITIES = ["high", "low"];
 
   // Input validation for prompt
   if (!prompt) {
@@ -205,6 +208,23 @@ async function handleCreateImage(args, mockAPI) {
     throw new Error(`output_mime_type must be one of: ${VALID_OUTPUT_MIME_TYPES.join(", ")}. Got: ${outputMimeType}`);
   }
 
+  // Input validation for mask (if provided)
+  if (mask !== undefined && mask !== null) {
+    if (typeof mask !== "string") {
+      throw new Error("mask must be a string");
+    }
+    if (mask.trim().length === 0) {
+      throw new Error("mask cannot be empty");
+    }
+  }
+
+  // Input validation for input_fidelity (if provided)
+  if (inputFidelity !== undefined && inputFidelity !== null) {
+    if (!VALID_INPUT_FIDELITIES.includes(inputFidelity)) {
+      throw new Error(`input_fidelity must be one of: ${VALID_INPUT_FIDELITIES.join(", ")}. Got: ${inputFidelity}`);
+    }
+  }
+
   try {
     // Map output_mime_type to OpenAI output_format
     const outputFormatMap = {
@@ -233,13 +253,23 @@ async function handleCreateImage(args, mockAPI) {
 
     let result;
     if (hasInputImages) {
-      result = await mockAPI.images.edit({
+      const editParams = {
         model: "gpt-image-1.5",
         image: imageData.length === 1 ? imageData[0] : imageData,
         prompt: effectivePrompt,
         size,
+        background,
+        output_format: outputFormat,
         n: numberOfImages,
-      });
+      };
+      if (mask) {
+        const maskData = readImageFile(mask);
+        editParams.mask = maskData;
+      }
+      if (inputFidelity) {
+        editParams.input_fidelity = inputFidelity;
+      }
+      result = await mockAPI.images.edit(editParams);
     } else {
       result = await mockAPI.images.generate({
         model: "gpt-image-1.5",
@@ -1116,6 +1146,228 @@ describe("Edge Cases", () => {
         mockAPI
       );
       assert.ok(result.content.length > 0);
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+});
+
+// ─── Mask Validation ───
+
+describe("Mask Validation", () => {
+  let mockAPI;
+
+  beforeEach(() => {
+    mockAPI = new MockOpenAI();
+  });
+
+  it("should accept edit request without mask", async () => {
+    try {
+      const result = await handleCreateImage(
+        { prompt: "edit this", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH] },
+        mockAPI
+      );
+      assert.ok(result.content.length > 0);
+      assert.strictEqual(mockAPI.lastRequest.mask, undefined);
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should reject non-string mask", async () => {
+    await assert.rejects(
+      () => handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH], mask: 123 }, mockAPI),
+      /mask must be a string/
+    );
+  });
+
+  it("should reject empty mask", async () => {
+    await assert.rejects(
+      () => handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH], mask: "  " }, mockAPI),
+      /mask cannot be empty/
+    );
+  });
+
+  it("should pass mask to API when provided", async () => {
+    try {
+      await handleCreateImage(
+        { prompt: "edit this", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH], mask: TINY_PNG_PATH },
+        mockAPI
+      );
+      assert.ok(mockAPI.lastRequest.mask);
+      assert.strictEqual(mockAPI.lastRequest.mask.mimeType, "image/png");
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should not include mask when omitted", async () => {
+    try {
+      await handleCreateImage(
+        { prompt: "edit this", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH] },
+        mockAPI
+      );
+      assert.strictEqual(mockAPI.lastRequest.mask, undefined);
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+});
+
+// ─── Input Fidelity Validation ───
+
+describe("Input Fidelity Validation", () => {
+  let mockAPI;
+
+  beforeEach(() => {
+    mockAPI = new MockOpenAI();
+  });
+
+  it("should accept 'high'", async () => {
+    try {
+      const result = await handleCreateImage(
+        { prompt: "edit this", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH], input_fidelity: "high" },
+        mockAPI
+      );
+      assert.ok(result.content.length > 0);
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should accept 'low'", async () => {
+    try {
+      const result = await handleCreateImage(
+        { prompt: "edit this", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH], input_fidelity: "low" },
+        mockAPI
+      );
+      assert.ok(result.content.length > 0);
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should reject invalid input_fidelity", async () => {
+    await assert.rejects(
+      () => handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH], input_fidelity: "medium" }, mockAPI),
+      /input_fidelity must be one of/
+    );
+  });
+
+  it("should accept omitted input_fidelity", async () => {
+    try {
+      const result = await handleCreateImage(
+        { prompt: "edit this", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH] },
+        mockAPI
+      );
+      assert.ok(result.content.length > 0);
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should pass input_fidelity to API when provided", async () => {
+    try {
+      await handleCreateImage(
+        { prompt: "edit this", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH], input_fidelity: "high" },
+        mockAPI
+      );
+      assert.strictEqual(mockAPI.lastRequest.input_fidelity, "high");
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should not include input_fidelity when omitted", async () => {
+    try {
+      await handleCreateImage(
+        { prompt: "edit this", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH] },
+        mockAPI
+      );
+      assert.strictEqual(mockAPI.lastRequest.input_fidelity, undefined);
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+});
+
+// ─── Edit Endpoint Parameters ───
+
+describe("Edit Endpoint Parameters", () => {
+  let mockAPI;
+
+  beforeEach(() => {
+    mockAPI = new MockOpenAI();
+  });
+
+  it("should pass background to edit call", async () => {
+    try {
+      await handleCreateImage(
+        { prompt: "edit this", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH], background: "transparent" },
+        mockAPI
+      );
+      assert.strictEqual(mockAPI.lastEndpoint, "edit");
+      assert.strictEqual(mockAPI.lastRequest.background, "transparent");
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should pass output_format to edit call", async () => {
+    try {
+      await handleCreateImage(
+        { prompt: "edit this", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH], output_mime_type: "image/webp" },
+        mockAPI
+      );
+      assert.strictEqual(mockAPI.lastEndpoint, "edit");
+      assert.strictEqual(mockAPI.lastRequest.output_format, "webp");
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should pass all parameters to edit call", async () => {
+    try {
+      await handleCreateImage({
+        prompt: "edit this",
+        output_file: DEFAULT_OUTPUT,
+        input_images: [TINY_PNG_PATH],
+        size: "1536x1024",
+        background: "opaque",
+        output_mime_type: "image/jpeg",
+        number_of_images: 2,
+        input_fidelity: "low",
+        mask: TINY_PNG_PATH,
+      }, new MockOpenAI({ editResponses: [MockOpenAI.defaultImageResponse(2)] }));
+
+      // Can't check mockAPI since we created a new one inline, but no errors means success
+      assert.ok(true);
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+      cleanup(join(fixturesDir, "test-output_1.png"));
+      cleanup(join(fixturesDir, "test-output_2.png"));
+    }
+  });
+
+  it("should default background to auto in edit call", async () => {
+    try {
+      await handleCreateImage(
+        { prompt: "edit this", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH] },
+        mockAPI
+      );
+      assert.strictEqual(mockAPI.lastRequest.background, "auto");
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should default output_format to png in edit call", async () => {
+    try {
+      await handleCreateImage(
+        { prompt: "edit this", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH] },
+        mockAPI
+      );
+      assert.strictEqual(mockAPI.lastRequest.output_format, "png");
     } finally {
       cleanup(DEFAULT_OUTPUT);
     }

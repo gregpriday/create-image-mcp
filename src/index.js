@@ -140,6 +140,7 @@ const VALID_SIZES = ["1024x1024", "1024x1536", "1536x1024", "auto"];
 const VALID_QUALITIES = ["low", "medium", "high", "auto"];
 const VALID_BACKGROUNDS = ["transparent", "opaque", "auto"];
 const VALID_OUTPUT_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"];
+const VALID_INPUT_FIDELITIES = ["high", "low"];
 
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -208,7 +209,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             number_of_images: {
               type: "integer",
-              description: "Number of image variations to generate (1-4).",
+              description: "Number of image variations to generate (1-4). Multiple images are saved with numbered filenames (e.g., output_1.png, output_2.png).",
               minimum: 1,
               maximum: 4,
               default: 1,
@@ -216,7 +217,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             output_mime_type: {
               type: "string",
-              description: "Output image format.",
+              description: "Output image format. 'image/png' supports transparency, 'image/jpeg' for smaller file sizes, 'image/webp' for modern web use.",
               enum: VALID_OUTPUT_MIME_TYPES,
               default: "image/png",
               examples: ["image/png", "image/jpeg", "image/webp"],
@@ -228,6 +229,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 "./system-prompt.txt",
                 "/Users/john/brand-guidelines.txt",
               ],
+            },
+            mask: {
+              type: "string",
+              description: "File path to a PNG image with an alpha channel to use as a mask for targeted inpainting. Transparent areas of the mask indicate where the image should be edited. Only used with the edit endpoint (when input_images is provided).",
+              examples: [
+                "./mask.png",
+                "/Users/john/Documents/mask.png",
+              ],
+            },
+            input_fidelity: {
+              type: "string",
+              description: "Controls how strictly the output image preserves the original input image details. 'high' preserves more details, 'low' allows more creative freedom. Only used with the edit endpoint (when input_images is provided).",
+              enum: VALID_INPUT_FIDELITIES,
+              examples: ["high", "low"],
             },
           },
           required: ["prompt", "output_file"],
@@ -252,6 +267,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const numberOfImages = request.params.arguments?.number_of_images || 1;
   const outputMimeType = request.params.arguments?.output_mime_type || "image/png";
   const systemMessageFile = request.params.arguments?.system_message_file;
+  const mask = request.params.arguments?.mask;
+  const inputFidelity = request.params.arguments?.input_fidelity;
 
   // Input validation for prompt
   if (!prompt) {
@@ -343,6 +360,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     throw new Error(`output_mime_type must be one of: ${VALID_OUTPUT_MIME_TYPES.join(", ")}. Got: ${outputMimeType}`);
   }
 
+  // Input validation for mask (if provided)
+  if (mask !== undefined && mask !== null) {
+    if (typeof mask !== "string") {
+      throw new Error("mask must be a string");
+    }
+    if (mask.trim().length === 0) {
+      throw new Error("mask cannot be empty");
+    }
+  }
+
+  // Input validation for input_fidelity (if provided)
+  if (inputFidelity !== undefined && inputFidelity !== null) {
+    if (!VALID_INPUT_FIDELITIES.includes(inputFidelity)) {
+      throw new Error(`input_fidelity must be one of: ${VALID_INPUT_FIDELITIES.join(", ")}. Got: ${inputFidelity}`);
+    }
+  }
+
   try {
     // Map output_mime_type to OpenAI output_format
     const outputFormatMap = {
@@ -376,13 +410,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const result = await retryWithBackoff(async () => {
       if (hasInputImages) {
         // Use edit endpoint for image editing
-        return await openai.images.edit({
+        const editParams = {
           model: IMAGE_MODEL,
           image: imageFiles.length === 1 ? imageFiles[0] : imageFiles,
           prompt: effectivePrompt,
           size,
+          background,
+          output_format: outputFormat,
           n: numberOfImages,
-        });
+        };
+        if (mask) {
+          const maskData = readImageFile(mask);
+          const maskFile = await toFile(maskData.data, basename(mask), { type: maskData.mimeType });
+          editParams.mask = maskFile;
+        }
+        if (inputFidelity) {
+          editParams.input_fidelity = inputFidelity;
+        }
+        return await openai.images.edit(editParams);
       } else {
         // Use generate endpoint for text-to-image
         return await openai.images.generate({
@@ -486,6 +531,7 @@ export {
   VALID_QUALITIES,
   VALID_BACKGROUNDS,
   VALID_OUTPUT_MIME_TYPES,
+  VALID_INPUT_FIDELITIES,
   SUPPORTED_IMAGE_TYPES,
   MAX_IMAGE_SIZE,
   IMAGE_MODEL,

@@ -26,13 +26,17 @@ const packageJson = JSON.parse(
   readFileSync(join(__dirname, "..", "package.json"), "utf-8")
 );
 
-// Initialize OpenAI client
+// Detect if running as main entry point vs imported for testing
+const isMainModule = process.argv[1] &&
+  (process.argv[1] === __filename || process.argv[1].endsWith("/create-image-mcp"));
+
+// Initialize OpenAI client (only required when running as server)
 const apiKey = process.env.OPENAI_API_KEY;
-if (!apiKey) {
+if (!apiKey && isMainModule) {
   throw new Error("OPENAI_API_KEY environment variable is required");
 }
 
-const openai = new OpenAI({ apiKey });
+const openai = apiKey ? new OpenAI({ apiKey, maxRetries: 0 }) : null;
 
 // Image generation model
 const IMAGE_MODEL = "gpt-image-1.5";
@@ -63,19 +67,22 @@ async function retryWithBackoff(fn, maxRetries = MAX_RETRIES, initialDelay = INI
     } catch (error) {
       lastError = error;
 
-      // Don't retry on certain error types
-      const errorMessage = error.message || "";
-      const lowerMessage = errorMessage.toLowerCase();
-
-      // Don't retry auth errors, quota errors, or content policy violations
-      if (lowerMessage.includes("api key") ||
-          lowerMessage.includes("authentication") ||
-          lowerMessage.includes("unauthorized") ||
-          lowerMessage.includes("quota") ||
-          lowerMessage.includes("rate limit") ||
-          lowerMessage.includes("billing") ||
-          lowerMessage.includes("content_policy")) {
-        throw error;
+      // Don't retry on non-retryable error types
+      const status = error.status || error.statusCode;
+      if (status) {
+        // Retry 429 (rate limit) and 5xx (server errors); don't retry anything else
+        if (status !== 429 && status < 500) {
+          throw error;
+        }
+      } else {
+        // For non-HTTP errors, check message for non-retryable conditions
+        const lowerMessage = (error.message || "").toLowerCase();
+        if (lowerMessage.includes("api key") ||
+            lowerMessage.includes("authentication") ||
+            lowerMessage.includes("unauthorized") ||
+            lowerMessage.includes("content_policy")) {
+          throw error;
+        }
       }
 
       // If this was the last attempt, throw the error
@@ -85,7 +92,7 @@ async function retryWithBackoff(fn, maxRetries = MAX_RETRIES, initialDelay = INI
 
       // Calculate delay with exponential backoff
       const delay = initialDelay * Math.pow(2, attempt);
-      console.error(`[RETRY] Attempt ${attempt + 1}/${maxRetries} failed: ${errorMessage}. Retrying in ${delay}ms...`);
+      console.error(`[RETRY] Attempt ${attempt + 1}/${maxRetries} failed: ${error.message || "Unknown error"}. Retrying in ${delay}ms...`);
 
       // Wait before retrying
       await new Promise(resolve => setTimeout(resolve, delay));
@@ -122,8 +129,8 @@ function readImageFile(filePath) {
   };
 }
 
-// Create MCP server
-const server = new Server(
+// Create MCP server (only when running as main)
+const server = isMainModule ? new Server(
   {
     name: "create-image",
     version: packageJson.version,
@@ -133,7 +140,7 @@ const server = new Server(
       tools: {},
     },
   }
-);
+) : null;
 
 // Valid configuration options
 const VALID_SIZES = ["1024x1024", "1024x1536", "1536x1024", "auto"];
@@ -142,8 +149,8 @@ const VALID_BACKGROUNDS = ["transparent", "opaque", "auto"];
 const VALID_OUTPUT_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const VALID_INPUT_FIDELITIES = ["high", "low"];
 
-// List available tools
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+// List available tools handler (registered below when running as server)
+const listToolsHandler = async () => {
   return {
     tools: [
       {
@@ -250,56 +257,70 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
     ],
   };
-});
+};
 
-// Handle tool calls
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  if (request.params.name !== "create_image") {
-    throw new Error(`Unknown tool: ${request.params.name}`);
+/**
+ * Handle create_image tool calls.
+ * Extracted as a named function so unit tests can call it directly with a mock API client.
+ *
+ * @param {object} args - Tool arguments (prompt, output_file, etc.)
+ * @param {object} apiClient - OpenAI-compatible client with images.generate/edit
+ * @param {object} [options] - Optional configuration
+ * @param {number} [options.maxRetries] - Max retry attempts
+ * @param {number} [options.retryDelay] - Initial retry delay in ms
+ * @returns {Promise<object>} MCP tool result
+ */
+async function handleCreateImage(args, apiClient, options = {}) {
+  const prompt = args.prompt;
+  const inputImages = args.input_images;
+  const outputFile = args.output_file;
+  const size = args.size || "1024x1024";
+  const quality = args.quality || "auto";
+  const background = args.background || "auto";
+  const numberOfImages = args.number_of_images !== undefined && args.number_of_images !== null ? args.number_of_images : 1;
+  const outputMimeType = args.output_mime_type || "image/png";
+  const systemMessageFile = args.system_message_file;
+  const mask = args.mask;
+  const inputFidelity = args.input_fidelity;
+
+  // Helper to return a tool-level error (visible to the model, not a protocol error)
+  function toolError(message) {
+    return {
+      isError: true,
+      content: [{ type: "text", text: message }],
+    };
   }
-
-  const prompt = request.params.arguments?.prompt;
-  const inputImages = request.params.arguments?.input_images;
-  const outputFile = request.params.arguments?.output_file;
-  const size = request.params.arguments?.size || "1024x1024";
-  const quality = request.params.arguments?.quality || "auto";
-  const background = request.params.arguments?.background || "auto";
-  const numberOfImages = request.params.arguments?.number_of_images || 1;
-  const outputMimeType = request.params.arguments?.output_mime_type || "image/png";
-  const systemMessageFile = request.params.arguments?.system_message_file;
-  const mask = request.params.arguments?.mask;
-  const inputFidelity = request.params.arguments?.input_fidelity;
 
   // Input validation for prompt
   if (!prompt) {
-    throw new Error("Missing required parameter: prompt");
+    return toolError("Missing required parameter: prompt");
   }
 
   if (typeof prompt !== "string") {
-    throw new Error("Prompt must be a string");
+    return toolError("Prompt must be a string");
   }
 
   if (prompt.trim().length === 0) {
-    throw new Error("Prompt cannot be empty");
+    return toolError("Prompt cannot be empty");
   }
 
   if (prompt.length > 32000) {
-    throw new Error("Prompt exceeds maximum length of 32000 characters");
+    return toolError("Prompt exceeds maximum length of 32000 characters");
   }
 
   // Input validation for input_images (if provided)
   if (inputImages !== undefined && inputImages !== null) {
     if (!Array.isArray(inputImages)) {
-      throw new Error("input_images must be an array of file paths");
+      return toolError("input_images must be an array of file paths");
     }
 
     if (inputImages.length === 0) {
-      throw new Error("input_images cannot be an empty array");
+      return toolError("input_images cannot be an empty array");
     }
 
     for (const imgPath of inputImages) {
       if (typeof imgPath !== "string" || imgPath.trim().length === 0) {
-        throw new Error("Each input_images entry must be a non-empty string file path");
+        return toolError("Each input_images entry must be a non-empty string file path");
       }
     }
   }
@@ -308,13 +329,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   let systemMessage = null;
   if (systemMessageFile !== undefined && systemMessageFile !== null) {
     if (typeof systemMessageFile !== "string") {
-      throw new Error("system_message_file must be a string");
+      return toolError("system_message_file must be a string");
     }
     if (systemMessageFile.trim().length === 0) {
-      throw new Error("system_message_file cannot be empty");
+      return toolError("system_message_file cannot be empty");
     }
     if (!existsSync(systemMessageFile)) {
-      throw new Error(`System message file not found: ${systemMessageFile}`);
+      return toolError(`System message file not found: ${systemMessageFile}`);
     }
     systemMessage = readFileSync(systemMessageFile, "utf-8");
     if (systemMessage.length > 4000) {
@@ -324,56 +345,61 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   // Input validation for output_file (required)
   if (!outputFile) {
-    throw new Error("Missing required parameter: output_file");
+    return toolError("Missing required parameter: output_file");
   }
 
   if (typeof outputFile !== "string") {
-    throw new Error("output_file must be a string");
+    return toolError("output_file must be a string");
   }
 
   if (outputFile.trim().length === 0) {
-    throw new Error("output_file cannot be empty");
+    return toolError("output_file cannot be empty");
   }
 
   // Input validation for size
   if (!VALID_SIZES.includes(size)) {
-    throw new Error(`size must be one of: ${VALID_SIZES.join(", ")}. Got: ${size}`);
+    return toolError(`size must be one of: ${VALID_SIZES.join(", ")}. Got: ${size}`);
   }
 
   // Input validation for quality
   if (!VALID_QUALITIES.includes(quality)) {
-    throw new Error(`quality must be one of: ${VALID_QUALITIES.join(", ")}. Got: ${quality}`);
+    return toolError(`quality must be one of: ${VALID_QUALITIES.join(", ")}. Got: ${quality}`);
   }
 
   // Input validation for background
   if (!VALID_BACKGROUNDS.includes(background)) {
-    throw new Error(`background must be one of: ${VALID_BACKGROUNDS.join(", ")}. Got: ${background}`);
+    return toolError(`background must be one of: ${VALID_BACKGROUNDS.join(", ")}. Got: ${background}`);
   }
 
   // Input validation for number_of_images
   if (!Number.isInteger(numberOfImages) || numberOfImages < 1 || numberOfImages > 4) {
-    throw new Error(`number_of_images must be an integer between 1 and 4. Got: ${numberOfImages}`);
+    return toolError(`number_of_images must be an integer between 1 and 4. Got: ${numberOfImages}`);
   }
 
   // Input validation for output_mime_type
   if (!VALID_OUTPUT_MIME_TYPES.includes(outputMimeType)) {
-    throw new Error(`output_mime_type must be one of: ${VALID_OUTPUT_MIME_TYPES.join(", ")}. Got: ${outputMimeType}`);
+    return toolError(`output_mime_type must be one of: ${VALID_OUTPUT_MIME_TYPES.join(", ")}. Got: ${outputMimeType}`);
+  }
+
+  // Cross-field validation: transparent background requires PNG or WebP
+  if (background === "transparent" && outputMimeType === "image/jpeg") {
+    return toolError("Transparent background requires PNG or WebP output format. JPEG does not support transparency.");
   }
 
   // Input validation for mask (if provided)
   if (mask !== undefined && mask !== null) {
     if (typeof mask !== "string") {
-      throw new Error("mask must be a string");
+      return toolError("mask must be a string");
     }
     if (mask.trim().length === 0) {
-      throw new Error("mask cannot be empty");
+      return toolError("mask cannot be empty");
     }
   }
 
   // Input validation for input_fidelity (if provided)
   if (inputFidelity !== undefined && inputFidelity !== null) {
     if (!VALID_INPUT_FIDELITIES.includes(inputFidelity)) {
-      throw new Error(`input_fidelity must be one of: ${VALID_INPUT_FIDELITIES.join(", ")}. Got: ${inputFidelity}`);
+      return toolError(`input_fidelity must be one of: ${VALID_INPUT_FIDELITIES.join(", ")}. Got: ${inputFidelity}`);
     }
   }
 
@@ -407,6 +433,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Generate images
     const outputImages = [];
 
+    const maxRetries = options.maxRetries !== undefined ? options.maxRetries : MAX_RETRIES;
+    const retryDelay = options.retryDelay !== undefined ? options.retryDelay : INITIAL_RETRY_DELAY;
+
     const result = await retryWithBackoff(async () => {
       if (hasInputImages) {
         // Use edit endpoint for image editing
@@ -415,6 +444,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           image: imageFiles.length === 1 ? imageFiles[0] : imageFiles,
           prompt: effectivePrompt,
           size,
+          quality,
           background,
           output_format: outputFormat,
           n: numberOfImages,
@@ -427,10 +457,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (inputFidelity) {
           editParams.input_fidelity = inputFidelity;
         }
-        return await openai.images.edit(editParams);
+        return await apiClient.images.edit(editParams);
       } else {
         // Use generate endpoint for text-to-image
-        return await openai.images.generate({
+        return await apiClient.images.generate({
           model: IMAGE_MODEL,
           prompt: effectivePrompt,
           size,
@@ -440,7 +470,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           n: numberOfImages,
         });
       }
-    });
+    }, maxRetries, retryDelay);
 
     if (result.data) {
       for (const entry of result.data) {
@@ -504,27 +534,73 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ],
     };
   } catch (error) {
-    // MCP-specific error handling with codes
     const errorMessage = error.message || "Image generation failed";
+
+    // Categorize errors using status codes when available (OpenAI SDK errors)
+    const status = error.status || error.statusCode;
+    if (status) {
+      if (status === 401) {
+        return toolError(`[AUTH_ERROR] Invalid or missing API key: ${errorMessage}`);
+      } else if (status === 403) {
+        return toolError(`[AUTH_ERROR] Permission denied: ${errorMessage}`);
+      } else if (status === 429) {
+        return toolError(`[QUOTA_ERROR] Rate limit exceeded: ${errorMessage}`);
+      } else if (status === 402) {
+        return toolError(`[QUOTA_ERROR] Billing issue: ${errorMessage}`);
+      } else if (status === 408 || error.code === "ETIMEDOUT" || error.code === "ECONNABORTED") {
+        return toolError(`[TIMEOUT_ERROR] Request timed out: ${errorMessage}`);
+      } else if (status === 400 || status === 422) {
+        const lowerMessage = errorMessage.toLowerCase();
+        if (lowerMessage.includes("content_policy") || lowerMessage.includes("safety")) {
+          return toolError(`[SAFETY_ERROR] Request blocked by safety filters: ${errorMessage}`);
+        }
+        return toolError(`[API_ERROR] Invalid request: ${errorMessage}`);
+      } else if (status >= 500) {
+        return toolError(`[API_ERROR] OpenAI server error: ${errorMessage}`);
+      }
+    }
+
+    // Fallback: categorize by message content
     const lowerMessage = errorMessage.toLowerCase();
 
-    // Categorize errors (case-insensitive)
+    // Filesystem errors (don't mislabel as API errors)
+    if (error.code === "EACCES" || error.code === "ENOENT" || error.code === "ENOSPC" || error.code === "EISDIR") {
+      return toolError(`[FILE_ERROR] Filesystem error: ${errorMessage}`);
+    }
+
     if (lowerMessage.includes("api key") || lowerMessage.includes("authentication") || lowerMessage.includes("unauthorized")) {
-      throw new Error(`[AUTH_ERROR] Invalid or missing API key: ${errorMessage}`);
+      return toolError(`[AUTH_ERROR] Invalid or missing API key: ${errorMessage}`);
     } else if (lowerMessage.includes("quota") || lowerMessage.includes("rate limit") || lowerMessage.includes("billing")) {
-      throw new Error(`[QUOTA_ERROR] API quota exceeded: ${errorMessage}`);
+      return toolError(`[QUOTA_ERROR] API quota exceeded: ${errorMessage}`);
     } else if (lowerMessage.includes("timeout")) {
-      throw new Error(`[TIMEOUT_ERROR] Request timed out: ${errorMessage}`);
+      return toolError(`[TIMEOUT_ERROR] Request timed out: ${errorMessage}`);
     } else if (lowerMessage.includes("safety") || lowerMessage.includes("blocked") || lowerMessage.includes("content_policy")) {
-      throw new Error(`[SAFETY_ERROR] Request blocked by safety filters: ${errorMessage}`);
+      return toolError(`[SAFETY_ERROR] Request blocked by safety filters: ${errorMessage}`);
+    } else if (lowerMessage.includes("input image")) {
+      return toolError(`[FILE_ERROR] ${errorMessage}`);
     } else {
-      throw new Error(`[API_ERROR] OpenAI API error: ${errorMessage}`);
+      return toolError(`[API_ERROR] OpenAI API error: ${errorMessage}`);
     }
   }
-});
+}
+
+// Register MCP handlers (only when running as server)
+if (server) {
+  server.setRequestHandler(ListToolsRequestSchema, listToolsHandler);
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    if (request.params.name !== "create_image") {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Unknown tool: ${request.params.name}` }],
+      };
+    }
+    return handleCreateImage(request.params.arguments || {}, openai);
+  });
+}
 
 // Export for testing
 export {
+  handleCreateImage,
   retryWithBackoff,
   readImageFile,
   VALID_SIZES,
@@ -537,36 +613,39 @@ export {
   IMAGE_MODEL,
 };
 
-// Process stability handlers
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("[FATAL] Unhandled Rejection at:", promise, "Reason:", reason);
-  process.exit(1);
-});
+// Server startup (only when running as main entry point)
+if (isMainModule) {
+  // Process stability handlers
+  process.on("unhandledRejection", (reason, promise) => {
+    console.error("[FATAL] Unhandled Rejection at:", promise, "Reason:", reason);
+    process.exit(1);
+  });
 
-process.on("uncaughtException", (error) => {
-  console.error("[FATAL] Uncaught Exception:", error.message, error.stack);
-  process.exit(1);
-});
+  process.on("uncaughtException", (error) => {
+    console.error("[FATAL] Uncaught Exception:", error.message, error.stack);
+    process.exit(1);
+  });
 
-// Graceful shutdown handler
-process.on("SIGINT", () => {
-  console.error("Received SIGINT, shutting down gracefully...");
-  process.exit(0);
-});
+  // Graceful shutdown handler
+  process.on("SIGINT", () => {
+    console.error("Received SIGINT, shutting down gracefully...");
+    process.exit(0);
+  });
 
-process.on("SIGTERM", () => {
-  console.error("Received SIGTERM, shutting down gracefully...");
-  process.exit(0);
-});
+  process.on("SIGTERM", () => {
+    console.error("Received SIGTERM, shutting down gracefully...");
+    process.exit(0);
+  });
 
-// Start the server
-async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("Create Image MCP server running on stdio");
+  // Start the server
+  async function main() {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error("Create Image MCP server running on stdio");
+  }
+
+  main().catch((error) => {
+    console.error("Fatal error in main():", error);
+    process.exit(1);
+  });
 }
-
-main().catch((error) => {
-  console.error("Fatal error in main():", error);
-  process.exit(1);
-});

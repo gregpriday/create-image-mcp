@@ -168,6 +168,7 @@ async function runTests() {
     const expectedProps = [
       "prompt", "input_images", "output_file", "size",
       "quality", "background", "number_of_images", "output_mime_type", "system_message_file",
+      "mask", "input_fidelity",
     ];
 
     for (const prop of expectedProps) {
@@ -175,7 +176,14 @@ async function runTests() {
         throw new Error(`Missing property in schema: ${prop}`);
       }
     }
-    console.log(`   ✅ All ${expectedProps.length} properties present in schema (including system_message_file)`);
+    // Also check no unexpected properties
+    const actualProps = Object.keys(props);
+    for (const prop of actualProps) {
+      if (!expectedProps.includes(prop)) {
+        throw new Error(`Unexpected property in schema: ${prop}`);
+      }
+    }
+    console.log(`   ✅ All ${expectedProps.length} properties present in schema (including mask, input_fidelity)`);
 
     // Validate enums
     if (props.size.enum.length !== 4) {
@@ -215,10 +223,19 @@ async function runTests() {
       arguments: {},
     });
 
-    if (!emptyResponse.error) {
-      throw new Error("Expected error for missing prompt");
+    // Validation errors are now returned as tool results with isError: true (not protocol errors)
+    if (emptyResponse.error) {
+      throw new Error("Expected tool-level error (isError), not protocol error");
     }
-    console.log(`   ✅ Missing prompt correctly rejected: ${emptyResponse.error.message.substring(0, 60)}...`);
+    const toolResult = emptyResponse.result;
+    if (!toolResult.isError) {
+      throw new Error("Expected isError: true for missing prompt");
+    }
+    const errorText = toolResult.content[0].text;
+    if (!errorText.includes("Missing required parameter: prompt")) {
+      throw new Error(`Unexpected error text: ${errorText}`);
+    }
+    console.log(`   ✅ Missing prompt correctly rejected as tool error: ${errorText.substring(0, 60)}...`);
 
     // ─── Test 4: Live API (optional) ───
     if (hasApiKey) {

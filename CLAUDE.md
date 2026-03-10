@@ -56,12 +56,12 @@ The server implements a **single-tool MCP server** following the stdio transport
    - Tool description is optimized for AI agent invocation with clear trigger phrases
    - Input schema includes validation rules and examples
 
-3. **Request Handling**
-   - Handles `CallToolRequestSchema` for tool execution
-   - **Input validation**: null/undefined check → type check → empty string check → length check
+3. **Request Handling** (via exported `handleCreateImage` function)
+   - **Input validation**: null/undefined check → type check → empty string check → length check → cross-field check
+   - **Error protocol**: Validation and API errors return `{ isError: true }` tool results (not protocol-level errors)
    - **OpenAI integration**: Uses `openai` SDK with `images.generate` for text-to-image and `images.edit` for image editing
    - **Response handling**: Decodes base64 image data, saves to disk, returns text-only response with file paths
-   - **Error categorization**: Maps OpenAI errors to MCP-friendly error codes
+   - **Error categorization**: Uses HTTP status codes first, then message-based fallback. Separates filesystem, auth, quota, timeout, safety, and API errors
 
 4. **Process Stability**
    - Handles unhandled rejections, uncaught exceptions, SIGINT, SIGTERM
@@ -77,7 +77,7 @@ The server implements a **single-tool MCP server** following the stdio transport
 - Supports n=1-10 images per request (tool limits to 1-4)
 - Returns base64-encoded image data (b64_json)
 - Supports image input for editing via images.edit endpoint (PNG, JPEG, WebP, GIF; max 20MB)
-- Retry with exponential backoff (3 retries, skips auth/quota/content_policy errors)
+- OpenAI SDK built-in retries disabled (`maxRetries: 0`); custom retry with exponential backoff (3 retries, retries 429/5xx, skips auth/content_policy errors)
 
 ### Tool Parameters
 
@@ -103,12 +103,13 @@ The tool returns **text-only** MCP content:
 
 ### Error Handling Strategy
 
-All errors are **categorized by prefix** for MCP client consumption:
-- `[AUTH_ERROR]`: API key / authentication issues
-- `[QUOTA_ERROR]`: Rate limits, quota exceeded, or billing errors
-- `[TIMEOUT_ERROR]`: Request timeouts
+All errors are returned as **tool-level errors** (`isError: true`) with categorized prefixes:
+- `[AUTH_ERROR]`: API key / authentication issues (401, 403)
+- `[QUOTA_ERROR]`: Rate limits, quota exceeded, or billing errors (402, 429)
+- `[TIMEOUT_ERROR]`: Request timeouts (408, ETIMEDOUT)
 - `[SAFETY_ERROR]`: Content blocked by safety filters or content policy violations
-- `[API_ERROR]`: Generic OpenAI API errors
+- `[FILE_ERROR]`: Filesystem errors (EACCES, ENOENT, etc.)
+- `[API_ERROR]`: Generic OpenAI API errors (400, 422, 5xx)
 
 ### Package Distribution
 

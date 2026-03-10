@@ -8,6 +8,7 @@
 import { readFileSync, existsSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { homedir } from "os";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -40,31 +41,31 @@ const OPTIONAL_ENV_VARS = [
 
 function checkEnvFile() {
   const envPath = join(projectRoot, ".env");
+  const homeEnvPath = join(homedir(), ".env");
 
   console.log("🔍 Checking environment configuration...\n");
 
-  // Check if .env file exists
-  if (!existsSync(envPath)) {
-    return false; // Return false to indicate no file
+  const hasProjectEnv = existsSync(envPath);
+  const hasHomeEnv = existsSync(homeEnvPath);
+
+  if (hasProjectEnv) {
+    console.log("✅ .env file exists (project)");
+  }
+  if (hasHomeEnv) {
+    console.log("✅ .env file exists (home directory)");
+  }
+  if (!hasProjectEnv && !hasHomeEnv) {
+    return false;
   }
 
-  console.log("✅ .env file exists");
   return true;
 }
 
-function loadEnvFile() {
-  const envPath = join(projectRoot, ".env");
-
-  // If .env doesn't exist, return empty object (will fall back to process.env)
-  if (!existsSync(envPath)) {
-    return {};
-  }
-
+function parseEnvFile(filePath) {
   try {
-    const envContent = readFileSync(envPath, "utf-8");
+    const envContent = readFileSync(filePath, "utf-8");
     const envVars = {};
 
-    // Parse .env file
     envContent.split("\n").forEach((line) => {
       const trimmed = line.trim();
       if (trimmed && !trimmed.startsWith("#")) {
@@ -77,9 +78,42 @@ function loadEnvFile() {
 
     return envVars;
   } catch (error) {
-    console.error(`❌ ERROR: Failed to read .env file: ${error.message}`);
+    console.error(`❌ ERROR: Failed to read ${filePath}: ${error.message}`);
     return null;
   }
+}
+
+function loadEnvFile() {
+  const envPath = join(projectRoot, ".env");
+  const homeEnvPath = join(homedir(), ".env");
+  let merged = {};
+  let hadError = false;
+
+  // Load home .env first (lower priority)
+  if (existsSync(homeEnvPath)) {
+    const homeVars = parseEnvFile(homeEnvPath);
+    if (homeVars === null) {
+      hadError = true;
+    } else {
+      Object.assign(merged, homeVars);
+    }
+  }
+
+  // Load project .env second (higher priority, overrides home)
+  if (existsSync(envPath)) {
+    const projectVars = parseEnvFile(envPath);
+    if (projectVars === null) {
+      hadError = true;
+    } else {
+      Object.assign(merged, projectVars);
+    }
+  }
+
+  if (hadError && Object.keys(merged).length === 0) {
+    return null;
+  }
+
+  return merged;
 }
 
 function validateRequiredVars(envVars, hasEnvFile) {
@@ -116,7 +150,7 @@ function validateRequiredVars(envVars, hasEnvFile) {
       }
     }
 
-    console.log(`✅ ${envVar.name}: OK (${value.substring(0, 10)}...)`);
+    console.log(`✅ ${envVar.name}: OK (${value.substring(0, 4)}...)`);
   }
 
   return allValid;

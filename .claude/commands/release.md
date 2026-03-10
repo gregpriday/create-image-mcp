@@ -1,12 +1,9 @@
 ---
-description: Fully automated NPM release with version detection
+description: Tag a release and push to trigger GitHub Actions NPM publish
 argument-hint: [patch|minor|major] (optional - auto-detected if omitted)
 allowed-tools:
   - Bash(npm test:*)
   - Bash(npm pack:*)
-  - Bash(npm whoami:*)
-  - Bash(npm publish:*)
-  - Bash(npm view:*)
   - Bash(git status:*)
   - Bash(git add:*)
   - Bash(git commit:*)
@@ -22,26 +19,18 @@ allowed-tools:
   - Write
 ---
 
-# Automated NPM Release for @gpriday/create-image-mcp
+# Release @gpriday/create-image-mcp
+
+NPM publishing is handled by GitHub Actions on tag push. This command bumps the version, tags, and pushes.
 
 ## Current State
 - Git status: !`git status`
 - Current branch: !`git branch --show-current`
 - Latest tag: !`git describe --tags --abbrev=0 2>/dev/null || echo "none"`
 - Current version: !`node -p "require('./package.json').version"`
-- NPM user: !`npm whoami`
 - Changes since last tag: !`git log $(git describe --tags --abbrev=0 2>/dev/null || echo "HEAD")..HEAD --oneline 2>/dev/null || echo "No previous tags"`
 
-## Automated Release Process
-
-**IMPORTANT:** This command will automatically:
-1. Analyze commit history to determine version bump type
-2. Run all tests (STOP if any fail)
-3. Update package.json version
-4. Commit changes
-5. Create git tag
-6. Publish to NPM
-7. Push to origin
+## Steps
 
 ### Step 1: Analyze Changes & Determine Version
 
@@ -66,31 +55,19 @@ Calculate new version based on current package.json version and bump type.
 
 1. **Check for Uncommitted Changes**
    - Run `git status --porcelain`
-   - If ANY uncommitted changes exist (modified, untracked, or staged files):
-     - List all uncommitted changes
-     - STOP release process
-     - Tell user: "Please commit or stash all changes before running release. The release process will only commit the version bump in package.json."
-     - Do NOT proceed with any release steps
+   - If ANY uncommitted changes exist: STOP and tell user to commit or stash first
 
 2. **Verify Prerequisites**
    - Must be on `main` branch (STOP if not)
    - Run `npm test` - all tests must pass (STOP if any fail)
-   - Run `npm pack --dry-run` to preview package
 
-3. **Verify NPM Authentication**
-   - Check `npm whoami` returns "gpriday"
-   - If not authenticated, STOP and tell user to run `npm login`
+### Step 3: Update package.json
 
-### Step 3: Update Files Automatically
-
-1. **Update package.json**
-   - Read current package.json
-   - Update `version` field to new calculated version
-   - Write back to file
+- Read current package.json
+- Update `version` field to new calculated version
+- Write back to file
 
 ### Step 4: Commit & Tag
-
-Execute these commands sequentially:
 
 ```bash
 git add package.json
@@ -100,65 +77,31 @@ git tag -a v[NEW_VERSION] -m "Release version [NEW_VERSION]
 [First 3-5 key changes from commit history]"
 ```
 
-### Step 5: Publish to NPM
-
-```bash
-npm publish --access public
-```
-
-**CRITICAL**: `--access public` is required for scoped package `@gpriday/create-image-mcp`
-
-### Step 6: Push to Git
+### Step 5: Push (triggers GitHub Actions publish)
 
 ```bash
 git push origin main
 git push origin v[NEW_VERSION]
 ```
 
-### Step 7: Verify & Report
-
-Run verification:
-```bash
-npm view @gpriday/create-image-mcp version
-```
+### Step 6: Report
 
 **Report to user:**
-- Version published: [NEW_VERSION]
+- Version tagged: v[NEW_VERSION]
+- GitHub Actions will publish to NPM automatically
 - NPM: https://www.npmjs.com/package/@gpriday/create-image-mcp
-- Install: `npm install -g @gpriday/create-image-mcp`
-- Git tagged and pushed
 - **Key changes in this release:**
-  [List 5-7 main changes from commit history since last tag]
+  [List 3-5 main changes from commit history since last tag]
 
 ## Error Handling
 
 **If tests fail:**
 - Report which tests failed
 - STOP release process
-- Tell user to fix tests first
 
 **If git has uncommitted changes:**
-- List all uncommitted files
-- Tell user: "Please commit or stash all changes before running release"
-- Explain: "The release process will only commit the version bump in package.json"
-- STOP release process
-
-**If NPM publish fails:**
-- Check if version already exists on NPM
-- Check NPM authentication
-- Report specific error
-- STOP (git tag already created, user may need to delete tag)
+- STOP and tell user to commit or stash first
 
 **If git push fails:**
-- Check remote access
-- Verify branch is up to date
-- Note: Package is already published to NPM
-- User may need to force push or resolve conflicts
-
-## Package Details
-
-- Package: `@gpriday/create-image-mcp`
-- Binary: `create-image-mcp`
-- License: MIT
-- Minimum Node: >=20.0.0
-- Scope: @gpriday (requires --access public)
+- Check remote access and branch status
+- Tag and commit are local only until push succeeds — safe to retry

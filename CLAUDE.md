@@ -85,7 +85,7 @@ The server implements a **single-tool MCP server** following the stdio transport
 |-----------|----------|------|---------|-------------|
 | `prompt` | Yes | string | - | Image description or editing instructions (1-32,000 chars) |
 | `output_file` | Yes | string | - | File path to save the generated image |
-| `style` | No | enum | - | Style preset (ui-mockup, illustration, icon, diagram, photo-realistic) |
+| `style` | No | enum | - | Style preset (built-in: ui-mockup; user styles via create-image-styles/) |
 | `input_images` | No | array | - | File paths to input images for editing |
 | `size` | No | enum | 1024x1024 | 1024x1024, 1024x1536, 1536x1024, auto |
 | `quality` | No | enum | auto | low, medium, high, auto |

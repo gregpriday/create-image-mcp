@@ -37,11 +37,9 @@ describe("Exported Constants", () => {
     assert.deepStrictEqual(VALID_INPUT_FIDELITIES, ["high", "low"]);
   });
 
-  it("should have at least 5 built-in styles", () => {
+  it("should have ui-mockup as a built-in style", () => {
     const names = getStyleNames();
-    assert.ok(names.length >= 5, `Expected at least 5 styles, got ${names.length}`);
+    assert.ok(names.length >= 1, `Expected at least 1 style, got ${names.length}`);
     assert.ok(names.includes("ui-mockup"), "Should include ui-mockup style");
-    assert.ok(names.includes("illustration"), "Should include illustration style");
-    assert.ok(names.includes("diagram"), "Should include diagram style");
   });
 });

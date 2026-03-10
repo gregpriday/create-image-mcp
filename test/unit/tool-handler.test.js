@@ -16,6 +16,9 @@ import {
   SUPPORTED_IMAGE_TYPES,
   MAX_IMAGE_SIZE,
   IMAGE_MODEL,
+  getStyle,
+  getStyleNames,
+  listStyles,
 } from "../../src/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -185,14 +188,28 @@ describe("Input Images Validation", () => {
     mockAPI = new MockOpenAI();
   });
 
-  it("should return tool error for non-array input_images", async () => {
-    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, input_images: "not-array" }, mockAPI);
-    assertToolError(result, /input_images must be an array/);
+  it("should normalize string input_images to array", async () => {
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, input_images: "not-a-real-file.png" }, mockAPI);
+    // Should proceed past validation (string gets normalized to ["not-a-real-file.png"])
+    // and fail on file read, not on input_images validation
+    assert.strictEqual(result.isError, true);
+    assert.ok(!result.content[0].text.includes("input_images must be"));
+  });
+
+  it("should normalize JSON-encoded array string to array", async () => {
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, input_images: '["file1.png", "file2.png"]' }, mockAPI);
+    assert.strictEqual(result.isError, true);
+    assert.ok(!result.content[0].text.includes("input_images must be"));
+  });
+
+  it("should return tool error for non-string non-array input_images", async () => {
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, input_images: 123 }, mockAPI);
+    assertToolError(result, /input_images must be/);
   });
 
   it("should return tool error for empty input_images array", async () => {
     const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, input_images: [] }, mockAPI);
-    assertToolError(result, /input_images cannot be an empty array/);
+    assertToolError(result, /input_images cannot be empty/);
   });
 
   it("should return tool error for input_images with non-string entries", async () => {
@@ -1283,5 +1300,178 @@ describe("retryWithBackoff", () => {
         throw new Error("persistent failure");
       }, 2, 1);
     }, /persistent failure/);
+  });
+});
+
+// ─── Style Presets ───
+
+describe("Style Presets", () => {
+  let mockAPI;
+
+  beforeEach(() => {
+    mockAPI = new MockOpenAI();
+  });
+
+  it("should return tool error for unknown style", async () => {
+    const result = await handleCreateImage({
+      prompt: "test",
+      output_file: DEFAULT_OUTPUT,
+      style: "nonexistent-style",
+    }, mockAPI);
+    assertToolError(result, /Unknown style: "nonexistent-style"/);
+  });
+
+  it("should return tool error for non-string style", async () => {
+    const result = await handleCreateImage({
+      prompt: "test",
+      output_file: DEFAULT_OUTPUT,
+      style: 123,
+    }, mockAPI);
+    assertToolError(result, /style must be a string/);
+  });
+
+  it("should apply style system prompt to effective prompt", async () => {
+    try {
+      const result = await handleCreateImage({
+        prompt: "A dashboard with analytics",
+        output_file: DEFAULT_OUTPUT,
+        style: "ui-mockup",
+      }, mockAPI);
+      assert.strictEqual(result.isError, undefined);
+      // Verify the prompt sent to the API includes the style system prompt
+      const sentPrompt = mockAPI.lastRequest.prompt;
+      assert.ok(sentPrompt.includes("flat vector illustration"), `Expected style preamble in prompt, got: ${sentPrompt.substring(0, 100)}`);
+      assert.ok(sentPrompt.includes("A dashboard with analytics"), "Expected user prompt in final prompt");
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should apply style defaults when user does not override", async () => {
+    try {
+      const result = await handleCreateImage({
+        prompt: "A settings page",
+        output_file: DEFAULT_OUTPUT,
+        style: "ui-mockup",
+      }, mockAPI);
+      assert.strictEqual(result.isError, undefined);
+      // ui-mockup defaults: size=1024x1536, quality=high, background=opaque
+      assert.strictEqual(mockAPI.lastRequest.size, "1024x1536");
+      assert.strictEqual(mockAPI.lastRequest.quality, "high");
+      assert.strictEqual(mockAPI.lastRequest.background, "opaque");
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should let user args override style defaults", async () => {
+    try {
+      const result = await handleCreateImage({
+        prompt: "A settings page",
+        output_file: DEFAULT_OUTPUT,
+        style: "ui-mockup",
+        size: "1024x1024",
+        quality: "low",
+      }, mockAPI);
+      assert.strictEqual(result.isError, undefined);
+      assert.strictEqual(mockAPI.lastRequest.size, "1024x1024");
+      assert.strictEqual(mockAPI.lastRequest.quality, "low");
+      // background still comes from style default
+      assert.strictEqual(mockAPI.lastRequest.background, "opaque");
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should combine style prompt with system_message_file", async () => {
+    const sysFile = join(fixturesDir, "test-system-msg.txt");
+    writeFileSync(sysFile, "Extra brand guidelines here.");
+    try {
+      const result = await handleCreateImage({
+        prompt: "A login form",
+        output_file: DEFAULT_OUTPUT,
+        style: "ui-mockup",
+        system_message_file: sysFile,
+      }, mockAPI);
+      assert.strictEqual(result.isError, undefined);
+      const sentPrompt = mockAPI.lastRequest.prompt;
+      // Style prompt comes first, then system_message_file, then user prompt
+      const styleIdx = sentPrompt.indexOf("flat vector illustration");
+      const brandIdx = sentPrompt.indexOf("Extra brand guidelines");
+      const userIdx = sentPrompt.indexOf("A login form");
+      assert.ok(styleIdx >= 0, "Style prompt should be present");
+      assert.ok(brandIdx >= 0, "System message file content should be present");
+      assert.ok(userIdx >= 0, "User prompt should be present");
+      assert.ok(styleIdx < brandIdx, "Style prompt should come before system_message_file");
+      assert.ok(brandIdx < userIdx, "System message should come before user prompt");
+    } finally {
+      cleanup(DEFAULT_OUTPUT, sysFile);
+    }
+  });
+
+  it("should work without style (null/undefined ignored)", async () => {
+    try {
+      const result = await handleCreateImage({
+        prompt: "A simple image",
+        output_file: DEFAULT_OUTPUT,
+      }, mockAPI);
+      assert.strictEqual(result.isError, undefined);
+      // Prompt should be the raw user prompt with no style preamble
+      assert.strictEqual(mockAPI.lastRequest.prompt, "A simple image");
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+});
+
+// ─── Style Module ───
+
+describe("Style Module", () => {
+  it("getStyleNames should return an array of strings", () => {
+    const names = getStyleNames();
+    assert.ok(Array.isArray(names));
+    assert.ok(names.length >= 3, "Should have at least 3 built-in styles");
+    for (const name of names) {
+      assert.strictEqual(typeof name, "string");
+    }
+  });
+
+  it("getStyle should return style object for valid name", () => {
+    const style = getStyle("ui-mockup");
+    assert.ok(style);
+    assert.strictEqual(style.name, "UI Mockup");
+    assert.ok(style.systemPrompt.length > 0);
+    assert.ok(style.defaults);
+    assert.strictEqual(style.defaults.size, "1024x1536");
+  });
+
+  it("getStyle should return null for unknown name", () => {
+    assert.strictEqual(getStyle("does-not-exist"), null);
+  });
+
+  it("listStyles should return array with name, displayName, description", () => {
+    const styles = listStyles();
+    assert.ok(Array.isArray(styles));
+    assert.ok(styles.length >= 3);
+    for (const s of styles) {
+      assert.ok(s.name);
+      assert.ok(s.displayName);
+      assert.ok(s.description);
+    }
+  });
+
+  it("all styles should have required fields", () => {
+    for (const name of getStyleNames()) {
+      const style = getStyle(name);
+      assert.ok(style.name, `${name} missing name`);
+      assert.ok(style.description, `${name} missing description`);
+      assert.ok(style.systemPrompt, `${name} missing systemPrompt`);
+      assert.ok(typeof style.systemPrompt === "string", `${name} systemPrompt must be string`);
+    }
+  });
+
+  it("should include ui-mockup as a built-in style", () => {
+    const names = getStyleNames();
+    assert.ok(names.includes("ui-mockup"));
   });
 });

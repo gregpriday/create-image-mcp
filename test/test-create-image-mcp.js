@@ -166,7 +166,7 @@ async function runTests() {
     // Validate schema
     const props = createImageTool.inputSchema.properties;
     const expectedProps = [
-      "prompt", "input_images", "output_file", "size",
+      "prompt", "style", "input_images", "output_file", "size",
       "quality", "background", "number_of_images", "output_mime_type", "system_message_file",
       "mask", "input_fidelity",
     ];
@@ -183,7 +183,7 @@ async function runTests() {
         throw new Error(`Unexpected property in schema: ${prop}`);
       }
     }
-    console.log(`   ✅ All ${expectedProps.length} properties present in schema (including mask, input_fidelity)`);
+    console.log(`   ✅ All ${expectedProps.length} properties present in schema (including style, mask, input_fidelity)`);
 
     // Validate enums
     if (props.size.enum.length !== 4) {

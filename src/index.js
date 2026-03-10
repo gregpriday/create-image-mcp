@@ -13,6 +13,7 @@ import { fileURLToPath } from "url";
 import { dirname, join, extname, basename } from "path";
 import { homedir } from "os";
 import mime from "mime";
+import { getStyle, getStyleNames, listStyles } from "./styles.js";
 
 // Load .env file if it exists (supports both local dev and global install)
 // First try CWD, then fallback to home directory (won't override existing env)
@@ -173,13 +174,26 @@ const listToolsHandler = async () => {
                 "Make this image look like a watercolor painting",
               ],
             },
+            style: {
+              type: "string",
+              description: "Optional style preset that guides image generation towards a specific visual style.",
+              enum: getStyleNames(),
+              examples: getStyleNames(),
+            },
             input_images: {
-              type: "array",
-              description: "File paths to input images for editing or style reference. Supports PNG, JPEG, WebP, and GIF formats. Max 20MB per image. When provided, the prompt should describe how to modify or use these images.",
-              items: {
-                type: "string",
-              },
+              oneOf: [
+                {
+                  type: "string",
+                  description: "A single file path or a JSON-encoded array of file paths.",
+                },
+                {
+                  type: "array",
+                  items: { type: "string" },
+                },
+              ],
+              description: "File paths to input images for editing or style reference. Supports PNG, JPEG, WebP, and GIF formats. Max 20MB per image. When provided, the prompt should describe how to modify or use these images. Accepts a single path string, a JSON-encoded array string, or an array of strings.",
               examples: [
+                "./photo.jpg",
                 ["./photo.jpg"],
                 ["./source.png", "./style-reference.jpg"],
               ],
@@ -260,6 +274,28 @@ const listToolsHandler = async () => {
 };
 
 /**
+ * Normalize input_images to an array.
+ * Accepts: undefined/null, a string (single path or JSON-encoded array), or an array.
+ */
+function normalizeInputImages(value) {
+  if (value === undefined || value === null) return value;
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        // Not valid JSON, treat as single path
+      }
+    }
+    return [trimmed];
+  }
+  return value;
+}
+
+/**
  * Handle create_image tool calls.
  * Extracted as a named function so unit tests can call it directly with a mock API client.
  *
@@ -271,18 +307,6 @@ const listToolsHandler = async () => {
  * @returns {Promise<object>} MCP tool result
  */
 async function handleCreateImage(args, apiClient, options = {}) {
-  const prompt = args.prompt;
-  const inputImages = args.input_images;
-  const outputFile = args.output_file;
-  const size = args.size || "1024x1024";
-  const quality = args.quality || "auto";
-  const background = args.background || "auto";
-  const numberOfImages = args.number_of_images !== undefined && args.number_of_images !== null ? args.number_of_images : 1;
-  const outputMimeType = args.output_mime_type || "image/png";
-  const systemMessageFile = args.system_message_file;
-  const mask = args.mask;
-  const inputFidelity = args.input_fidelity;
-
   // Helper to return a tool-level error (visible to the model, not a protocol error)
   function toolError(message) {
     return {
@@ -290,6 +314,34 @@ async function handleCreateImage(args, apiClient, options = {}) {
       content: [{ type: "text", text: message }],
     };
   }
+
+  // Resolve style preset (if provided)
+  const styleName = args.style;
+  let style = null;
+  if (styleName !== undefined && styleName !== null) {
+    if (typeof styleName !== "string") {
+      return toolError("style must be a string");
+    }
+    style = getStyle(styleName);
+    if (!style) {
+      return toolError(`Unknown style: "${styleName}". Available styles: ${getStyleNames().join(", ")}`);
+    }
+  }
+
+  // Apply style defaults (user-provided args take priority)
+  const styleDefaults = style ? style.defaults || {} : {};
+
+  const prompt = args.prompt;
+  const inputImages = normalizeInputImages(args.input_images);
+  const outputFile = args.output_file;
+  const size = args.size || styleDefaults.size || "1024x1024";
+  const quality = args.quality || styleDefaults.quality || "auto";
+  const background = args.background || styleDefaults.background || "auto";
+  const numberOfImages = args.number_of_images !== undefined && args.number_of_images !== null ? args.number_of_images : 1;
+  const outputMimeType = args.output_mime_type || styleDefaults.output_mime_type || "image/png";
+  const systemMessageFile = args.system_message_file;
+  const mask = args.mask;
+  const inputFidelity = args.input_fidelity;
 
   // Input validation for prompt
   if (!prompt) {
@@ -308,14 +360,14 @@ async function handleCreateImage(args, apiClient, options = {}) {
     return toolError("Prompt exceeds maximum length of 32000 characters");
   }
 
-  // Input validation for input_images (if provided)
+  // Input validation for input_images (if provided, already normalized to array)
   if (inputImages !== undefined && inputImages !== null) {
     if (!Array.isArray(inputImages)) {
-      return toolError("input_images must be an array of file paths");
+      return toolError("input_images must be a string, a JSON-encoded array, or an array of file paths");
     }
 
     if (inputImages.length === 0) {
-      return toolError("input_images cannot be an empty array");
+      return toolError("input_images cannot be empty");
     }
 
     for (const imgPath of inputImages) {
@@ -412,10 +464,17 @@ async function handleCreateImage(args, apiClient, options = {}) {
     };
     const outputFormat = outputFormatMap[outputMimeType];
 
-    // Prepend system message to prompt if provided
-    // (OpenAI images API does not support a native system role)
-    const effectivePrompt = systemMessage && systemMessage.trim().length > 0
-      ? `${systemMessage.trim()}\n\n${prompt}`
+    // Build effective prompt: style system prompt → system_message_file → user prompt
+    // (OpenAI images API does not support a native system role, so we prepend)
+    const preambleParts = [];
+    if (style && style.systemPrompt) {
+      preambleParts.push(style.systemPrompt.trim());
+    }
+    if (systemMessage && systemMessage.trim().length > 0) {
+      preambleParts.push(systemMessage.trim());
+    }
+    const effectivePrompt = preambleParts.length > 0
+      ? `${preambleParts.join("\n\n")}\n\n${prompt}`
       : prompt;
 
     const hasInputImages = inputImages && inputImages.length > 0;
@@ -611,6 +670,9 @@ export {
   SUPPORTED_IMAGE_TYPES,
   MAX_IMAGE_SIZE,
   IMAGE_MODEL,
+  getStyle,
+  getStyleNames,
+  listStyles,
 };
 
 // Server startup (only when running as main entry point)

@@ -6,6 +6,7 @@ import {
   VALID_BACKGROUNDS,
   VALID_OUTPUT_MIME_TYPES,
   VALID_INPUT_FIDELITIES,
+  getStyleNames,
 } from "../../src/index.js";
 
 // Import the tool definition from the live server by issuing a tools/list request
@@ -34,5 +35,13 @@ describe("Exported Constants", () => {
 
   it("should have 2 valid input fidelities", () => {
     assert.deepStrictEqual(VALID_INPUT_FIDELITIES, ["high", "low"]);
+  });
+
+  it("should have at least 5 built-in styles", () => {
+    const names = getStyleNames();
+    assert.ok(names.length >= 5, `Expected at least 5 styles, got ${names.length}`);
+    assert.ok(names.includes("ui-mockup"), "Should include ui-mockup style");
+    assert.ok(names.includes("illustration"), "Should include illustration style");
+    assert.ok(names.includes("diagram"), "Should include diagram style");
   });
 });

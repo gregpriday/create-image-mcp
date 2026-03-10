@@ -17,12 +17,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gpriday/create-image-mcp.git"
+    "url": "git+https://github.com/gregpriday/create-image-mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/gpriday/create-image-mcp/issues"
+    "url": "https://github.com/gregpriday/create-image-mcp/issues"
   },
-  "homepage": "https://github.com/gpriday/create-image-mcp#readme",
+  "homepage": "https://github.com/gregpriday/create-image-mcp#readme",
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test test/unit/tool-handler.test.js test/unit/tool-description.test.js",

@@ -1,12 +1,12 @@
 # Create Image MCP Server
 
-A Model Context Protocol (MCP) server that generates and edits images using OpenAI's GPT Image model (`gpt-image-1.5`). This server enables Claude Desktop, Claude Code, and other MCP clients to create images from text descriptions and edit existing images.
+A Model Context Protocol (MCP) server that generates and edits images using OpenAI's GPT Image 2.5 models (`gpt-image-2.5-sunburst` and `gpt-image-2.5-flare`). This server enables Claude Desktop, Claude Code, and other MCP clients to create images from text descriptions and edit existing images.
 
 ## Features
 
-- Text-to-image generation via OpenAI GPT Image model
+- Text-to-image generation via OpenAI GPT Image 2.5 (precision `sunburst` or fast `flare` model)
 - Image editing and style transfer with input image support
-- Configurable size, quality, and output format
+- Custom sizes up to 4K (3840x2160), plus quality, compression, and output format controls
 - Transparent background support
 - Multiple image variations in a single request
 - Images saved to disk with text-only responses (no base64 bloat)
@@ -14,7 +14,7 @@ A Model Context Protocol (MCP) server that generates and edits images using Open
 
 ## Prerequisites
 
-- Node.js >= 20.0.0
+- Node.js >= 22.0.0
 - OpenAI API Key
 
 ## Installation
@@ -30,7 +30,7 @@ The `create-image-mcp` command will be available globally.
 ### Option 2: Local Development Install
 
 ```bash
-git clone https://github.com/gpriday/create-image-mcp.git
+git clone https://github.com/gregpriday/create-image-mcp.git
 cd create-image-mcp
 npm install
 ```
@@ -50,10 +50,14 @@ You can get an OpenAI API key from [OpenAI Platform](https://platform.openai.com
 npm run check-env
 ```
 
-The server will automatically load `.env` from:
-1. Current working directory (`.env`)
-2. Home directory (`~/.env`) as fallback
-3. Or use environment variables directly
+The server resolves settings in this order:
+1. Environment variables (including the `env` block of your MCP client config)
+2. `.env` in the server's working directory
+3. `~/.env`
+
+Only `OPENAI_API_KEY` and `OPENAI_IMAGE_MODEL` are read from `.env` files. Other variables such as `OPENAI_BASE_URL` are ignored there, so a project's `.env` can't redirect your key to another server.
+
+Optionally set `OPENAI_IMAGE_MODEL` to change the default model (defaults to `gpt-image-2.5-sunburst`), for example to pin a dated snapshot such as `gpt-image-2.5-sunburst-2026-09-08`.
 
 ## Usage
 
@@ -66,16 +70,17 @@ create-image-mcp
 
 **If running locally:**
 ```bash
-npm start
+node src/index.js
 ```
 
-The server runs on stdio and communicates via JSON-RPC 2.0.
+The server runs on stdio and communicates via JSON-RPC 2.0. In MCP client configs, launch `create-image-mcp` or `node /path/to/src/index.js` directly rather than `npm start`, since npm prints its own output to stdout.
 
 ### Test the Server
 
 ```bash
 npm test                     # Unit tests
-npm run test:integration     # Integration test with live API
+npm run test:integration     # MCP protocol test over stdio (no API calls)
+CREATE_IMAGE_LIVE_TEST=1 npm run test:integration   # Also generates one real image (costs a few cents)
 npm run test:all             # All tests
 ```
 
@@ -92,13 +97,24 @@ Generate or edit images using OpenAI GPT Image.
 | Parameter | Required | Type | Default | Description |
 |-----------|----------|------|---------|-------------|
 | `prompt` | Yes | string | - | Image description or editing instructions (1-32,000 chars) |
-| `output_file` | Yes | string | - | File path to save the generated image |
-| `input_images` | No | array | - | File paths to input images for editing (supports PNG/JPEG/WebP/GIF, max 20MB each) |
-| `size` | No | enum | `1024x1024` | `1024x1024`, `1024x1536`, `1536x1024`, `auto` |
+| `output_file` | Yes | string | - | File path to save the generated image (absolute recommended; `~/` is expanded) |
+| `model` | No | enum | `gpt-image-2.5-sunburst` | `gpt-image-2.5-sunburst` (precision) or `gpt-image-2.5-flare` (faster, for drafts) |
+| `style` | No | enum | - | Style preset (built-in: `ui-mockup`; add your own in `create-image-styles/`) |
+| `input_images` | No | array | - | File paths to input images for editing (PNG/JPEG/WebP, up to 16 images, max 20MB each) |
+| `size` | No | string | `1024x1024` | `auto` or `WIDTHxHEIGHT`, e.g. `1536x1024`, `2048x1152`, `3840x2160` (see size rules below) |
 | `quality` | No | enum | `auto` | `low`, `medium`, `high`, `auto` |
 | `background` | No | enum | `auto` | `transparent`, `opaque`, `auto` |
 | `number_of_images` | No | integer | `1` | Number of variations (1-4) |
-| `output_mime_type` | No | enum | `image/png` | `image/png`, `image/jpeg`, `image/webp` |
+| `output_mime_type` | No | enum | from extension, else `image/png` | `image/png`, `image/jpeg`, `image/webp` |
+| `output_compression` | No | integer | - | 0-100 compression for JPEG/WebP output |
+| `moderation` | No | enum | `auto` | `auto` or `low` (less restrictive filtering) |
+| `system_message_file` | No | string | - | Text file prepended to the prompt (max 4,000 chars), for brand or style rules |
+| `mask` | No | string | - | PNG with alpha channel marking the area to edit (requires `input_images`) |
+| `input_fidelity` | No | enum | - | `high` or `low`: how closely edits preserve the input (requires `input_images`) |
+
+**Size rules:** both edges must be multiples of 16, the longest edge at most 3840px, the aspect ratio at most 3:1, and the total between 655,360 and 8,294,400 pixels (1024x640 up to 3840x2160). Larger sizes cost more and take longer.
+
+**Paths and formats:** relative paths resolve against the server's working directory, which for Claude Desktop is usually not your project, so prefer absolute paths. The output format follows the `output_file` extension (`.png`, `.jpg`/`.jpeg`, `.webp`). If you set `output_mime_type` explicitly, the extension is corrected to match, and the response always reports the absolute path that was written.
 
 **Examples:**
 
@@ -167,13 +183,13 @@ Style transfer:
 
 The tool saves images to disk and returns a text-only response:
 ```
-Image saved to: ./landscape.png (245.3 KB, image/png)
+Image saved to: /Users/you/project/landscape.png (245.3 KB, image/png)
 ```
 
 For multiple images, files are numbered:
 ```
-Image saved to: ./cyberpunk-city_1.png (312.1 KB, image/png)
-Image saved to: ./cyberpunk-city_2.png (298.7 KB, image/png)
+Image saved to: /Users/you/project/cyberpunk-city_1.png (312.1 KB, image/png)
+Image saved to: /Users/you/project/cyberpunk-city_2.png (298.7 KB, image/png)
 ```
 
 ## Integration with Claude Desktop
@@ -287,11 +303,11 @@ Edit `~/.config/Claude/claude_desktop_config.json`:
 
 ## Integration with Claude Code
 
-### Option 1: Project-Level `mcp.json` (Recommended)
+### Option 1: Project-Level `.mcp.json` (Recommended)
 
-Add an `mcp.json` file to your project root. This is the simplest approach and works automatically when Claude Code opens the project.
+Add a `.mcp.json` file to your project root. This is the simplest approach and works automatically when Claude Code opens the project.
 
-> **Note:** If `OPENAI_API_KEY` is already set in your shell environment (e.g. in `~/.zshrc`, `~/.bashrc`, or `~/.env`), you can omit the `env` field entirely.
+> **Note:** If `OPENAI_API_KEY` is already set in your shell environment (e.g. in `~/.zshrc`, `~/.bashrc`, or `~/.env`), omit the `env` field entirely. That's the safer choice for a checked-in `.mcp.json`: never commit a real API key. Claude Code also expands `${OPENAI_API_KEY}` in the `env` block.
 
 **If installed globally:**
 ```json
@@ -360,9 +376,9 @@ codex mcp add create-image --env OPENAI_API_KEY=your_api_key_here -- node /path/
 Edit `~/.codex/config.toml`:
 
 ```toml
-[mcp.create-image]
+[mcp_servers.create-image]
 command = "create-image-mcp"
-env = ["OPENAI_API_KEY=your_api_key_here"]
+env = { OPENAI_API_KEY = "your_api_key_here" }
 ```
 
 ## Development
@@ -377,9 +393,10 @@ env = ["OPENAI_API_KEY=your_api_key_here"]
 ### Project Structure
 
 ```
-create-image/
+create-image-mcp/
 ├── src/
-│   └── index.js               # Main MCP server
+│   ├── index.js               # Main MCP server
+│   └── styles.js              # Built-in and user style presets
 ├── scripts/
 │   └── check-env.js           # Environment validation
 ├── test/
@@ -401,7 +418,7 @@ create-image/
 **Development:**
 - `npm start` - Start the MCP server (auto-runs environment validation)
 - `npm test` - Run unit tests
-- `npm run test:integration` - Run integration tests
+- `npm run test:integration` - Run the MCP protocol test (set `CREATE_IMAGE_LIVE_TEST=1` for a live generation)
 - `npm run test:all` - Run all tests
 - `npm run dev` - Run server with auto-reload
 
@@ -420,8 +437,11 @@ The server provides categorized error handling:
 - **[QUOTA_ERROR]**: API quota, rate limit, or billing errors
 - **[TIMEOUT_ERROR]**: Request timeout errors
 - **[SAFETY_ERROR]**: Content blocked by safety filters or content policy violations
+- **[FILE_ERROR]**: Missing, unreadable, or unsupported input images, masks, or output paths (input types are checked from file contents)
+- **[NO_IMAGE]**: The API returned no image
+- **[CANCELLED]**: The client cancelled the call; no files are written
 - **[API_ERROR]**: General API errors
-- **Retry Logic**: Transient failures retried with exponential backoff (up to 3 attempts)
+- **Retry Logic**: Rate limits (429), 408/409, server errors (5xx), and dropped connections are retried up to 3 times with exponential backoff, honoring `Retry-After`. Auth, validation, safety, exhausted-quota, and timeout errors are not retried. Each attempt times out after 5 minutes.
 - **Process Stability**: Unhandled rejections and exceptions trigger clean shutdown
 
 ## License

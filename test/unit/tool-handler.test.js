@@ -1,14 +1,19 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert";
-import { writeFileSync, unlinkSync, mkdirSync, existsSync } from "fs";
-import { join } from "path";
+import { writeFileSync, unlinkSync, mkdirSync, existsSync, rmSync, readdirSync, rmdirSync } from "fs";
+import { join, extname } from "path";
+import { APIConnectionError, APIConnectionTimeoutError, APIUserAbortError } from "openai";
+import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import {
   handleCreateImage,
   retryWithBackoff,
   readImageFile,
-  VALID_SIZES,
+  SIZE_PRESETS,
+  VALID_MODELS,
+  MAX_INPUT_IMAGES,
+  validateSize,
   VALID_QUALITIES,
   VALID_BACKGROUNDS,
   VALID_OUTPUT_MIME_TYPES,
@@ -39,7 +44,15 @@ const TINY_PNG_BUFFER = Buffer.from(
 const TINY_PNG_PATH = join(fixturesDir, "test-image.png");
 const TINY_JPEG_PATH = join(fixturesDir, "test-image.jpg");
 writeFileSync(TINY_PNG_PATH, TINY_PNG_BUFFER);
-writeFileSync(TINY_JPEG_PATH, TINY_PNG_BUFFER); // Same bytes, different extension for mime detection
+// A real 1x1 JPEG: input types are detected from file bytes, not extensions
+const TINY_JPEG_BUFFER = Buffer.from(
+  "/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAAaADAAQAAAABAAAAAQAAAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZjwCyBOmACZjs+EJ+/8AAEQgAAQABAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMABgYGBgYGCgYGCg4KCgoOEg4ODg4SFxISEhISFxwXFxcXFxccHBwcHBwcHCIiIiIiIicnJycnLCwsLCwsLCwsLP/bAEMBBwcHCwoLEwoKEy4fGh8uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLv/dAAQAAf/aAAwDAQACEQMRAD8A9kooor48+DP/2Q==",
+  "base64"
+);
+writeFileSync(TINY_JPEG_PATH, TINY_JPEG_BUFFER);
+
+// Input fixtures that cleanup() must never delete
+const SHARED_FIXTURES = new Set([TINY_PNG_PATH, TINY_JPEG_PATH]);
 
 // Default output path for tests that need one
 const DEFAULT_OUTPUT = join(fixturesDir, "test-output.png");
@@ -104,9 +117,15 @@ class MockOpenAI {
 }
 
 // Helper to clean up output files after tests
+// Removes each path plus its .png/.jpg/.webp siblings, since the handler
+// corrects the output extension to match the format it writes
 function cleanup(...paths) {
   for (const p of paths) {
-    if (existsSync(p)) unlinkSync(p);
+    const base = p.slice(0, p.length - extname(p).length);
+    for (const candidate of new Set([p, `${base}.png`, `${base}.jpg`, `${base}.webp`])) {
+      if (SHARED_FIXTURES.has(candidate)) continue;
+      if (existsSync(candidate)) unlinkSync(candidate);
+    }
   }
 }
 
@@ -197,9 +216,17 @@ describe("Input Images Validation", () => {
   });
 
   it("should normalize JSON-encoded array string to array", async () => {
-    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, input_images: '["file1.png", "file2.png"]' }, mockAPI);
-    assert.strictEqual(result.isError, true);
-    assert.ok(!result.content[0].text.includes("input_images must be"));
+    try {
+      const result = await handleCreateImage(
+        { prompt: "test", output_file: DEFAULT_OUTPUT, input_images: JSON.stringify([TINY_PNG_PATH, TINY_JPEG_PATH]) },
+        mockAPI
+      );
+      assert.strictEqual(result.isError, undefined);
+      assert.ok(Array.isArray(mockAPI.lastRequest.image));
+      assert.strictEqual(mockAPI.lastRequest.image.length, 2);
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
   });
 
   it("should return tool error for non-string non-array input_images", async () => {
@@ -360,8 +387,8 @@ describe("Size Validation", () => {
     mockAPI = new MockOpenAI();
   });
 
-  it("should accept all valid sizes", async () => {
-    for (const s of VALID_SIZES) {
+  it("should accept all size presets", async () => {
+    for (const s of SIZE_PRESETS) {
       try {
         const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, size: s }, mockAPI);
         assert.ok(result.content.length > 0, `Failed for size: ${s}`);
@@ -373,7 +400,29 @@ describe("Size Validation", () => {
 
   it("should return tool error for invalid size", async () => {
     const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, size: "512x512" }, mockAPI);
-    assertToolError(result, /size must be one of/);
+    assertToolError(result, /between 655,360 and 8,294,400 pixels/);
+    assert.strictEqual(mockAPI.callCount, 0);
+  });
+
+  it("should pass a valid custom size through to the API", async () => {
+    try {
+      await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, size: "1920x1088" }, mockAPI);
+      assert.strictEqual(mockAPI.lastRequest.size, "1920x1088");
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("validateSize should enforce each API limit", () => {
+    assert.strictEqual(validateSize("auto"), null);
+    assert.strictEqual(validateSize("1024x640"), null);
+    assert.strictEqual(validateSize("3840x2160"), null);
+    assert.match(validateSize("big"), /WIDTHxHEIGHT/);
+    assert.match(validateSize("1000x1000"), /multiples of 16/);
+    assert.match(validateSize("4096x2304"), /longest edge/);
+    assert.match(validateSize("3840x1024"), /aspect ratio/);
+    assert.match(validateSize("1008x640"), /total between/);
+    assert.match(validateSize("3840x2176"), /total between/);
   });
 
   it("should default to 1024x1024", async () => {
@@ -1233,11 +1282,12 @@ describe("retryWithBackoff", () => {
     assert.strictEqual(result, "ok");
   });
 
-  it("should retry on retryable errors and succeed", async () => {
+  it("should retry on dropped connections and succeed", async () => {
     let calls = 0;
+    const connectionError = new APIConnectionError({ cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) });
     const result = await retryWithBackoff(() => {
       calls++;
-      if (calls < 3) throw new Error("transient failure");
+      if (calls < 3) throw connectionError;
       return Promise.resolve("recovered");
     }, 3, 1);
     assert.strictEqual(result, "recovered");
@@ -1295,11 +1345,80 @@ describe("retryWithBackoff", () => {
   });
 
   it("should throw after max retries exhausted", async () => {
+    let calls = 0;
+    const err = new Error("persistent failure");
+    err.status = 503;
     await assert.rejects(async () => {
       await retryWithBackoff(() => {
-        throw new Error("persistent failure");
+        calls++;
+        throw err;
       }, 2, 1);
     }, /persistent failure/);
+    assert.strictEqual(calls, 3);
+  });
+
+  it("should not retry programming errors, cancellation, or exhausted quota", async () => {
+    const quota = new Error("You exceeded your current quota");
+    quota.status = 429;
+    quota.code = "insufficient_quota";
+    for (const err of [new TypeError("x is not a function"), quota, new APIUserAbortError(), new APIConnectionTimeoutError()]) {
+      let calls = 0;
+      await assert.rejects(() => retryWithBackoff(() => { calls++; throw err; }, 3, 1));
+      assert.strictEqual(calls, 1, `${err.name} should not be retried`);
+    }
+  });
+
+  it("should retry 408 and 409 responses", async () => {
+    for (const status of [408, 409]) {
+      let calls = 0;
+      const err = new Error(`status ${status}`);
+      err.status = status;
+      await retryWithBackoff(() => {
+        calls++;
+        if (calls < 2) throw err;
+        return Promise.resolve("ok");
+      }, 3, 1);
+      assert.strictEqual(calls, 2, `${status} should be retried`);
+    }
+  });
+
+  it("should wait for the Retry-After header", async () => {
+    const err = new Error("Rate limited");
+    err.status = 429;
+    err.headers = new Headers({ "retry-after": "0.2" });
+    let calls = 0;
+    const start = Date.now();
+    await retryWithBackoff(() => {
+      calls++;
+      if (calls < 2) throw err;
+      return Promise.resolve("ok");
+    }, 3, 1);
+    assert.ok(Date.now() - start >= 190, "should honor Retry-After");
+  });
+
+  it("should honor an HTTP-date Retry-After header", async () => {
+    const err = new Error("Rate limited");
+    err.status = 429;
+    err.headers = new Headers({ "retry-after": new Date(Date.now() + 1500).toUTCString() });
+    let calls = 0;
+    const start = Date.now();
+    await retryWithBackoff(() => {
+      calls++;
+      if (calls < 2) throw err;
+      return Promise.resolve("ok");
+    }, 3, 1);
+    // HTTP dates have 1-second resolution, so allow for rounding down
+    assert.ok(Date.now() - start >= 400, "should wait until the Retry-After date");
+  });
+
+  it("should stop waiting when the signal aborts", async () => {
+    const err = new Error("Server error");
+    err.status = 500;
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 20);
+    const start = Date.now();
+    await assert.rejects(() => retryWithBackoff(() => { throw err; }, 3, 5000, controller.signal));
+    assert.ok(Date.now() - start < 2000);
   });
 });
 
@@ -1473,5 +1592,530 @@ describe("Style Module", () => {
   it("should include ui-mockup as a built-in style", () => {
     const names = getStyleNames();
     assert.ok(names.includes("ui-mockup"));
+  });
+});
+
+// ─── Output Path & Format Resolution ───
+
+describe("Output Path & Format Resolution", () => {
+  const out = (name) => join(fixturesDir, name);
+
+  it("should infer JPEG from a .jpg output_file", async () => {
+    const mockAPI = new MockOpenAI();
+    try {
+      const result = await handleCreateImage({ prompt: "test", output_file: out("infer.jpg") }, mockAPI);
+      assert.strictEqual(mockAPI.lastRequest.output_format, "jpeg");
+      assert.ok(result.content[0].text.includes(`${out("infer.jpg")} (`));
+      assert.ok(result.content[0].text.includes("image/jpeg"));
+      assert.ok(existsSync(out("infer.jpg")));
+    } finally {
+      cleanup(out("infer.jpg"));
+    }
+  });
+
+  it("should infer WebP from a .webp output_file over a style default", async () => {
+    const mockAPI = new MockOpenAI();
+    try {
+      await handleCreateImage({ prompt: "test", output_file: out("infer-style.webp"), style: "ui-mockup" }, mockAPI);
+      assert.strictEqual(mockAPI.lastRequest.output_format, "webp");
+      assert.ok(existsSync(out("infer-style.webp")));
+    } finally {
+      cleanup(out("infer-style.webp"));
+    }
+  });
+
+  it("should correct a mismatched extension when output_mime_type is explicit", async () => {
+    const mockAPI = new MockOpenAI();
+    try {
+      const result = await handleCreateImage(
+        { prompt: "test", output_file: out("mismatch.png"), output_mime_type: "image/jpeg" },
+        mockAPI
+      );
+      assert.strictEqual(mockAPI.lastRequest.output_format, "jpeg");
+      assert.ok(result.content[0].text.includes(out("mismatch.jpg")));
+      assert.ok(existsSync(out("mismatch.jpg")));
+      assert.ok(!existsSync(out("mismatch.png")));
+    } finally {
+      cleanup(out("mismatch.png"));
+    }
+  });
+
+  it("should keep a .jpeg extension for JPEG output", async () => {
+    const mockAPI = new MockOpenAI();
+    try {
+      await handleCreateImage({ prompt: "test", output_file: out("keep.jpeg") }, mockAPI);
+      assert.strictEqual(mockAPI.lastRequest.output_format, "jpeg");
+      assert.ok(existsSync(out("keep.jpeg")));
+    } finally {
+      cleanup(out("keep.jpeg"));
+    }
+  });
+
+  it("should append an extension when output_file has none", async () => {
+    const mockAPI = new MockOpenAI();
+    try {
+      const result = await handleCreateImage({ prompt: "test", output_file: out("no-ext") }, mockAPI);
+      assert.ok(result.content[0].text.includes(out("no-ext.png")));
+      assert.ok(existsSync(out("no-ext.png")));
+    } finally {
+      cleanup(out("no-ext.png"));
+    }
+  });
+
+  it("should number multiple images using the corrected extension", async () => {
+    const mockAPI = new MockOpenAI({
+      generateResponses: [{ data: [{ b64_json: TINY_PNG_BUFFER.toString("base64") }, { b64_json: TINY_PNG_BUFFER.toString("base64") }] }],
+    });
+    try {
+      await handleCreateImage(
+        { prompt: "test", output_file: out("multi.png"), output_mime_type: "image/webp", number_of_images: 2 },
+        mockAPI
+      );
+      assert.ok(existsSync(out("multi_1.webp")));
+      assert.ok(existsSync(out("multi_2.webp")));
+    } finally {
+      cleanup(out("multi_1.webp"), out("multi_2.webp"));
+    }
+  });
+
+  it("should report an absolute path for a relative output_file", async () => {
+    const mockAPI = new MockOpenAI();
+    const relative = "test/fixtures/relative-out.png";
+    try {
+      const result = await handleCreateImage({ prompt: "test", output_file: relative }, mockAPI);
+      assert.ok(result.content[0].text.includes(join(process.cwd(), relative)));
+    } finally {
+      cleanup(join(process.cwd(), relative));
+    }
+  });
+
+  it("should expand ~ in system_message_file", { skip: !fixturesDir.startsWith(homedir()) }, async () => {
+    const mockAPI = new MockOpenAI();
+    const tildePath = "~" + join(fixturesDir, "system-prompt.txt").slice(homedir().length);
+    try {
+      const result = await handleCreateImage(
+        { prompt: "test", output_file: DEFAULT_OUTPUT, system_message_file: tildePath },
+        mockAPI
+      );
+      assert.strictEqual(result.isError, undefined);
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+});
+
+// ─── Argument Robustness ───
+
+describe("Argument Robustness", () => {
+  it("should accept number_of_images as a numeric string", async () => {
+    const mockAPI = new MockOpenAI();
+    try {
+      await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, number_of_images: "2" }, mockAPI);
+      assert.strictEqual(mockAPI.lastRequest.n, 2);
+    } finally {
+      cleanup(DEFAULT_OUTPUT, join(fixturesDir, "test-output_1.png"), join(fixturesDir, "test-output_2.png"));
+    }
+  });
+
+  it("should reject a non-numeric number_of_images string", async () => {
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, number_of_images: "two" }, new MockOpenAI());
+    assertToolError(result, /number_of_images must be an integer between 1 and 4/);
+  });
+
+  it("should reject mask without input_images", async () => {
+    const mockAPI = new MockOpenAI();
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, mask: TINY_PNG_PATH }, mockAPI);
+    assertToolError(result, /mask requires input_images/);
+    assert.strictEqual(mockAPI.callCount, 0);
+  });
+
+  it("should fail fast without retrying when the mask file is missing", async () => {
+    const mockAPI = new MockOpenAI();
+    const start = Date.now();
+    const result = await handleCreateImage(
+      { prompt: "test", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH], mask: join(fixturesDir, "missing-mask.png") },
+      mockAPI,
+      { retryDelay: 5000 }
+    );
+    assertToolError(result, /\[FILE_ERROR\]/);
+    assert.strictEqual(mockAPI.callCount, 0);
+    assert.ok(Date.now() - start < 2000, "should not have waited on retries");
+  });
+
+  it("should reject an output_file that is a directory", async () => {
+    const mockAPI = new MockOpenAI();
+    for (const outputFile of [fixturesDir, `${fixturesDir}/`]) {
+      const result = await handleCreateImage({ prompt: "test", output_file: outputFile }, mockAPI);
+      assertToolError(result, /must be a file path, not a directory/);
+    }
+    assert.strictEqual(mockAPI.callCount, 0);
+  });
+
+  it("should return a tool error when system_message_file is a directory", async () => {
+    const result = await handleCreateImage(
+      { prompt: "test", output_file: DEFAULT_OUTPUT, system_message_file: fixturesDir },
+      new MockOpenAI()
+    );
+    assertToolError(result, /System message file not found/);
+  });
+
+  it("should not retry a statusless moderation_blocked error", async () => {
+    const err = new Error("Rejected");
+    err.code = "moderation_blocked";
+    const mockAPI = new MockOpenAI({ errors: [err, err, err, err] });
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT }, mockAPI, { retryDelay: 1 });
+    assertToolError(result, /\[SAFETY_ERROR\]/);
+    assert.strictEqual(mockAPI.callCount, 1);
+  });
+
+  it("should categorize moderation_blocked code as a safety error", async () => {
+    const err = new Error("Your request was rejected as a result of our safety system.");
+    err.status = 400;
+    err.code = "moderation_blocked";
+    const mockAPI = new MockOpenAI({ errors: [err] });
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT }, mockAPI);
+    assertToolError(result, /\[SAFETY_ERROR\]/);
+    assert.strictEqual(mockAPI.callCount, 1);
+  });
+});
+
+// ─── GPT Image 2.5 Parameters ───
+
+describe("GPT Image 2.5 Parameters", () => {
+  let mockAPI;
+
+  beforeEach(() => {
+    mockAPI = new MockOpenAI();
+  });
+
+  it("should default to gpt-image-2.5-sunburst", async () => {
+    try {
+      await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT }, mockAPI);
+      assert.strictEqual(mockAPI.lastRequest.model, IMAGE_MODEL);
+      if (!process.env.OPENAI_IMAGE_MODEL) {
+        assert.strictEqual(IMAGE_MODEL, "gpt-image-2.5-sunburst");
+      }
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should use gpt-image-2.5-flare when requested", async () => {
+    try {
+      await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, model: "gpt-image-2.5-flare" }, mockAPI);
+      assert.strictEqual(mockAPI.lastRequest.model, "gpt-image-2.5-flare");
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should reject an unknown model", async () => {
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, model: "dall-e-3" }, mockAPI);
+    assertToolError(result, /model must be one of/);
+    assert.strictEqual(mockAPI.callCount, 0);
+  });
+
+  it("should pass output_compression for JPEG output", async () => {
+    const outputPath = join(fixturesDir, "compress.jpg");
+    try {
+      await handleCreateImage({ prompt: "test", output_file: outputPath, output_compression: "60" }, mockAPI);
+      assert.strictEqual(mockAPI.lastRequest.output_compression, 60);
+    } finally {
+      cleanup(outputPath);
+    }
+  });
+
+  it("should reject output_compression for PNG output", async () => {
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, output_compression: 60 }, mockAPI);
+    assertToolError(result, /only applies to JPEG or WebP/);
+  });
+
+  it("should reject out-of-range output_compression", async () => {
+    const result = await handleCreateImage(
+      { prompt: "test", output_file: join(fixturesDir, "x.webp"), output_compression: 101 },
+      mockAPI
+    );
+    assertToolError(result, /between 0 and 100/);
+  });
+
+  it("should pass moderation and omit it when unset", async () => {
+    try {
+      await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT }, mockAPI);
+      assert.strictEqual(mockAPI.lastRequest.moderation, undefined);
+      await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, moderation: "low" }, mockAPI);
+      assert.strictEqual(mockAPI.lastRequest.moderation, "low");
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should reject an invalid moderation value", async () => {
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, moderation: "off" }, mockAPI);
+    assertToolError(result, /moderation must be one of/);
+  });
+
+  it("should send moderation and compression to the edit endpoint too", async () => {
+    const outputPath = join(fixturesDir, "edit-params.webp");
+    try {
+      await handleCreateImage(
+        { prompt: "edit", output_file: outputPath, input_images: [TINY_PNG_PATH], moderation: "low", output_compression: 70 },
+        mockAPI
+      );
+      assert.strictEqual(mockAPI.lastEndpoint, "edit");
+      assert.strictEqual(mockAPI.lastRequest.moderation, "low");
+      assert.strictEqual(mockAPI.lastRequest.output_compression, 70);
+    } finally {
+      cleanup(outputPath);
+    }
+  });
+
+  it("should reject more than the maximum number of input images", async () => {
+    const images = Array(MAX_INPUT_IMAGES + 1).fill(TINY_PNG_PATH);
+    const result = await handleCreateImage({ prompt: "edit", output_file: DEFAULT_OUTPUT, input_images: images }, mockAPI);
+    assertToolError(result, /at most 16 images/);
+  });
+
+  it("should reject GIF input images before calling the API", async () => {
+    const gifPath = join(fixturesDir, "unsupported-input.gif");
+    writeFileSync(gifPath, Buffer.from("GIF89a\x01\x00\x01\x00\x00\x00\x00;", "latin1"));
+    try {
+      const result = await handleCreateImage({ prompt: "edit", output_file: DEFAULT_OUTPUT, input_images: [gifPath] }, mockAPI);
+      assertToolError(result, /Unsupported image type/);
+      assert.strictEqual(mockAPI.callCount, 0);
+    } finally {
+      if (existsSync(gifPath)) unlinkSync(gifPath);
+    }
+  });
+
+  it("should reject a non-PNG mask", async () => {
+    const result = await handleCreateImage(
+      { prompt: "edit", output_file: DEFAULT_OUTPUT, input_images: [TINY_PNG_PATH], mask: TINY_JPEG_PATH },
+      mockAPI
+    );
+    assertToolError(result, /mask must be a PNG/);
+  });
+});
+
+// ─── Response Details ───
+
+describe("Response Details", () => {
+  it("should report the model, size, quality, and tokens the API actually used", async () => {
+    const mockAPI = new MockOpenAI({
+      generateResponses: [{
+        data: [{ b64_json: TINY_PNG_BUFFER.toString("base64") }],
+        size: "1312x1199",
+        quality: "medium",
+        usage: { output_tokens: 215 },
+      }],
+    });
+    try {
+      const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, size: "auto" }, mockAPI);
+      const text = result.content[0].text;
+      assert.ok(text.includes(`model ${IMAGE_MODEL}`));
+      assert.ok(text.includes("size 1312x1199"));
+      assert.ok(text.includes("quality medium"));
+      assert.ok(text.includes("215 output tokens"));
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should fall back to the requested settings when the API omits them", async () => {
+    const mockAPI = new MockOpenAI();
+    try {
+      const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, quality: "low" }, mockAPI);
+      assert.ok(result.content[0].text.includes("size 1024x1024, quality low"));
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+});
+
+// ─── Hardening ───
+
+describe("Hardening", () => {
+  let mockAPI;
+
+  beforeEach(() => {
+    mockAPI = new MockOpenAI();
+  });
+
+  it("should reject unknown parameters", async () => {
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, aspect: "16:9" }, mockAPI);
+    assertToolError(result, /Unknown parameter: aspect/);
+    assert.strictEqual(mockAPI.callCount, 0);
+  });
+
+  it("should reject a non-string quality instead of defaulting it", async () => {
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, quality: false }, mockAPI);
+    assertToolError(result, /quality must be one of/);
+  });
+
+  it("should reject input_fidelity without input_images", async () => {
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, input_fidelity: "high" }, mockAPI);
+    assertToolError(result, /input_fidelity requires input_images/);
+  });
+
+  it("should reject a prompt that exceeds the limit once the style preamble is added", async () => {
+    const result = await handleCreateImage(
+      { prompt: "a".repeat(31990), output_file: DEFAULT_OUTPUT, style: "ui-mockup" },
+      mockAPI
+    );
+    assertToolError(result, /Prompt plus style\/system message/);
+    assert.strictEqual(mockAPI.callCount, 0);
+  });
+
+  it("should reject a text file renamed to .png as an input image", async () => {
+    const fakePath = join(fixturesDir, "not-really.png");
+    writeFileSync(fakePath, "just some text");
+    try {
+      const result = await handleCreateImage({ prompt: "edit", output_file: DEFAULT_OUTPUT, input_images: [fakePath] }, mockAPI);
+      assertToolError(result, /\[FILE_ERROR\].*Unsupported image type/);
+      assert.strictEqual(mockAPI.callCount, 0);
+    } finally {
+      unlinkSync(fakePath);
+    }
+  });
+
+  it("should send the detected type for input images", async () => {
+    try {
+      await handleCreateImage({ prompt: "edit", output_file: DEFAULT_OUTPUT, input_images: [TINY_JPEG_PATH] }, mockAPI);
+      assert.strictEqual(mockAPI.lastRequest.image.type, "image/jpeg");
+    } finally {
+      cleanup(DEFAULT_OUTPUT);
+    }
+  });
+
+  it("should report undecodable image data as an error without writing a file", async () => {
+    const api = new MockOpenAI({ generateResponses: [{ data: [{ b64_json: "%%%" }] }] });
+    const outputPath = join(fixturesDir, "garbage.png");
+    const result = await handleCreateImage({ prompt: "test", output_file: outputPath }, api);
+    assertToolError(result, /could not be decoded/);
+    assert.ok(!existsSync(outputPath));
+  });
+
+  it("should mark an empty API response as an error", async () => {
+    const api = new MockOpenAI({ generateResponses: [MockOpenAI.emptyResponse()] });
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT }, api);
+    assertToolError(result, /\[NO_IMAGE\]/);
+  });
+
+  it("should number files and note a shortfall when fewer images come back", async () => {
+    const api = new MockOpenAI({ generateResponses: [MockOpenAI.defaultImageResponse(1)] });
+    const outputPath = join(fixturesDir, "shortfall.png");
+    try {
+      const result = await handleCreateImage({ prompt: "test", output_file: outputPath, number_of_images: 3 }, api);
+      assert.ok(existsSync(join(fixturesDir, "shortfall_1.png")));
+      assert.ok(result.content[0].text.includes("requested 3 images but the API returned 1"));
+    } finally {
+      cleanup(join(fixturesDir, "shortfall_1.png"));
+    }
+  });
+
+  it("should report files already saved when a later write fails", async () => {
+    const api = new MockOpenAI({ generateResponses: [MockOpenAI.defaultImageResponse(2)] });
+    const outputPath = join(fixturesDir, "partial.png");
+    const blocker = join(fixturesDir, "partial_2.png");
+    mkdirSync(blocker, { recursive: true });
+    try {
+      const result = await handleCreateImage({ prompt: "test", output_file: outputPath, number_of_images: 2 }, api);
+      assertToolError(result, /\[FILE_ERROR\] Could not write .*partial_2\.png.*Already saved: .*partial_1\.png/);
+    } finally {
+      cleanup(join(fixturesDir, "partial_1.png"));
+      rmSync(blocker, { recursive: true, force: true });
+    }
+  });
+
+  it("should classify SDK connection timeouts as timeout errors without retrying", async () => {
+    const err = new APIConnectionTimeoutError();
+    const api = new MockOpenAI({ errors: [err, err, err, err] });
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT }, api, { retryDelay: 1 });
+    assertToolError(result, /\[TIMEOUT_ERROR\]/);
+    assert.strictEqual(api.callCount, 1);
+  });
+
+  it("should report exhausted quota clearly without retrying", async () => {
+    const err = new Error("You exceeded your current quota");
+    err.status = 429;
+    err.code = "insufficient_quota";
+    const api = new MockOpenAI({ errors: [err, err, err, err] });
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT }, api, { retryDelay: 1 });
+    assertToolError(result, /\[QUOTA_ERROR\] OpenAI account is out of credits/);
+    assert.strictEqual(api.callCount, 1);
+  });
+
+  it("should pass the abort signal to the API and write nothing once cancelled", async () => {
+    const controller = new AbortController();
+    const outputPath = join(fixturesDir, "cancelled.png");
+    const api = {
+      images: {
+        generate: async (_params, requestOptions) => {
+          assert.strictEqual(requestOptions.signal, controller.signal);
+          controller.abort();
+          return MockOpenAI.defaultImageResponse();
+        },
+      },
+    };
+    const result = await handleCreateImage({ prompt: "test", output_file: outputPath }, api, { signal: controller.signal });
+    assertToolError(result, /\[CANCELLED\]/);
+    assert.ok(!existsSync(outputPath));
+  });
+
+  it("should not resolve inherited object properties as styles", async () => {
+    assert.strictEqual(getStyle("constructor"), null);
+    const result = await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, style: "constructor" }, mockAPI);
+    assertToolError(result, /Unknown style/);
+  });
+});
+
+// ─── Style Compression Defaults ───
+
+describe("Style Compression Defaults", () => {
+  const stylesDir = join(process.cwd(), "create-image-styles");
+  const styleName = `test-compressed-${process.pid}`;
+  const stylePath = join(stylesDir, `${styleName}.json`);
+  const createdDir = !existsSync(stylesDir);
+
+  beforeEach(() => {
+    mkdirSync(stylesDir, { recursive: true });
+    writeFileSync(stylePath, JSON.stringify({
+      name: "Test Compressed",
+      description: "Test style with JPEG compression defaults",
+      systemPrompt: "Test style.",
+      defaults: { output_mime_type: "image/jpeg", output_compression: 70 },
+    }));
+  });
+
+  // Remove only what this suite created; leave the directory if anything else is in it
+  const removeStyle = () => {
+    if (existsSync(stylePath)) unlinkSync(stylePath);
+    if (createdDir && existsSync(stylesDir) && readdirSync(stylesDir).length === 0) rmdirSync(stylesDir);
+  };
+
+  it("should apply the style's compression to JPEG output", async () => {
+    const mockAPI = new MockOpenAI();
+    const outputPath = join(fixturesDir, "style-compressed");
+    try {
+      await handleCreateImage({ prompt: "test", output_file: outputPath, style: styleName }, mockAPI);
+      assert.strictEqual(mockAPI.lastRequest.output_format, "jpeg");
+      assert.strictEqual(mockAPI.lastRequest.output_compression, 70);
+    } finally {
+      cleanup(`${outputPath}.jpg`);
+      removeStyle();
+    }
+  });
+
+  it("should drop the style's compression when the caller asks for PNG", async () => {
+    const mockAPI = new MockOpenAI();
+    const outputPath = join(fixturesDir, "style-png.png");
+    try {
+      const result = await handleCreateImage({ prompt: "test", output_file: outputPath, style: styleName }, mockAPI);
+      assert.strictEqual(result.isError, undefined);
+      assert.strictEqual(mockAPI.lastRequest.output_format, "png");
+      assert.strictEqual(mockAPI.lastRequest.output_compression, undefined);
+    } finally {
+      cleanup(outputPath);
+      removeStyle();
+    }
   });
 });

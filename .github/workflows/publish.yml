@@ -23,6 +23,16 @@ jobs:
 
       - run: npm ci
 
+      - name: Check tag matches package.json version
+        run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$PKG_VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
       - run: npm test
+
+      - run: npm run test:integration
 
       - run: npm publish --access public

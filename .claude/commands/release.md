@@ -14,6 +14,7 @@ allowed-tools:
   - Bash(git describe:*)
   - Bash(git diff:*)
   - Bash(node:*)
+  - Bash(npm version:*)
   - Read
   - Edit
   - Write
@@ -61,16 +62,20 @@ Calculate new version based on current package.json version and bump type.
    - Must be on `main` branch (STOP if not)
    - Run `npm test` - all tests must pass (STOP if any fail)
 
-### Step 3: Update package.json
+### Step 3: Update package.json and package-lock.json
 
-- Read current package.json
-- Update `version` field to new calculated version
-- Write back to file
+```bash
+npm version [NEW_VERSION] --no-git-tag-version
+```
+
+This updates the version in both `package.json` and `package-lock.json`, so the lockfile doesn't drift.
+
+Also move the `## [Unreleased]` heading in CHANGELOG.md to `## [NEW_VERSION] - YYYY-MM-DD` (today's date) if it exists.
 
 ### Step 4: Commit & Tag
 
 ```bash
-git add package.json
+git add package.json package-lock.json CHANGELOG.md
 git commit -m "chore: prepare for v[NEW_VERSION] release"
 git tag -a v[NEW_VERSION] -m "Release version [NEW_VERSION]
 

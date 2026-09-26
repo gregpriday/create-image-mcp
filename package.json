@@ -1,7 +1,7 @@
 {
   "name": "@gpriday/create-image-mcp",
   "version": "0.2.0",
-  "description": "A Model Context Protocol (MCP) server that generates images using OpenAI's GPT Image model",
+  "description": "A Model Context Protocol (MCP) server that generates and edits images using OpenAI's GPT Image 2.5 models",
   "type": "module",
   "main": "src/index.js",
   "bin": {
@@ -25,7 +25,7 @@
   "homepage": "https://github.com/gregpriday/create-image-mcp#readme",
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test test/unit/tool-handler.test.js test/unit/tool-description.test.js",
+    "test": "node --test test/unit/tool-handler.test.js test/unit/tool-description.test.js test/unit/env.test.js test/unit/entry.test.js",
     "test:integration": "node test/test-create-image-mcp.js",
     "test:all": "npm test && npm run test:integration",
     "dev": "node --watch src/index.js",
@@ -40,6 +40,7 @@
     "model-context-protocol",
     "openai",
     "gpt-image",
+    "gpt-image-2.5",
     "image-generation",
     "ai",
     "llm",
@@ -48,12 +49,11 @@
   "author": "Greg Priday <greg@siteorigin.com>",
   "license": "MIT",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@modelcontextprotocol/sdk": "^1.30.1",
     "dotenv": "^16.6.1",
-    "mime": "^4.0.0",
-    "openai": "^4.80.0"
+    "openai": "^7.23.0"
   }
 }

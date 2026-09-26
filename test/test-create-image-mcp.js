@@ -9,23 +9,20 @@
  * 3. List tools
  * 4. Validate tool schema
  *
- * Note: Actual image generation requires OPENAI_API_KEY and is optional.
- * Run with: npm run test:integration
+ * Live image generation costs money, so it only runs when CREATE_IMAGE_LIVE_TEST=1
+ * and OPENAI_API_KEY are both set.
+ * Run with: npm run test:integration (or CREATE_IMAGE_LIVE_TEST=1 npm run test:integration)
  */
 
 import { spawn } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, statSync, unlinkSync } from "fs";
 import { join } from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
-import { config } from "dotenv";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = join(__dirname, "..");
-
-// Load environment
-config({ path: join(projectRoot, ".env") });
 
 let requestId = 0;
 
@@ -37,6 +34,15 @@ function encodeMessage(obj) {
 // Accumulated buffer and pending request tracking
 let stdoutBuffer = "";
 const pendingRequests = new Map();
+const protocolErrors = [];
+
+function rejectAllPending(error) {
+  for (const { reject, timeout } of pendingRequests.values()) {
+    clearTimeout(timeout);
+    reject(error);
+  }
+  pendingRequests.clear();
+}
 
 function setupStdoutHandler(serverProcess) {
   serverProcess.stdout.on("data", (data) => {
@@ -54,6 +60,10 @@ function setupStdoutHandler(serverProcess) {
 
       try {
         const frame = JSON.parse(line);
+        if (frame?.jsonrpc !== "2.0") {
+          protocolErrors.push(line.substring(0, 200));
+          continue;
+        }
         if (frame.id !== undefined && pendingRequests.has(frame.id)) {
           const { resolve, timeout } = pendingRequests.get(frame.id);
           clearTimeout(timeout);
@@ -61,13 +71,14 @@ function setupStdoutHandler(serverProcess) {
           resolve(frame);
         }
       } catch (e) {
-        console.error("Failed to parse JSON line:", line.substring(0, 100));
+        // Anything on stdout that isn't a JSON-RPC message breaks MCP clients
+        protocolErrors.push(line.substring(0, 200));
       }
     }
   });
 }
 
-function sendRequest(serverProcess, method, params = {}) {
+function sendRequest(serverProcess, method, params = {}, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const id = ++requestId;
     const request = {
@@ -80,7 +91,7 @@ function sendRequest(serverProcess, method, params = {}) {
     const timeout = setTimeout(() => {
       pendingRequests.delete(id);
       reject(new Error(`Timeout waiting for response to ${method} (id: ${id})`));
-    }, 30000);
+    }, timeoutMs);
 
     pendingRequests.set(id, { resolve, reject, timeout });
     serverProcess.stdin.write(encodeMessage(request));
@@ -101,19 +112,25 @@ async function runTests() {
   console.log("  Create Image MCP Server - Integration Tests");
   console.log("=".repeat(60));
 
-  // Check if we have an API key for live tests
-  const hasApiKey = !!process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== "test-key-for-testing";
-  if (!hasApiKey) {
-    console.log("\n⚠️  OPENAI_API_KEY not set. Skipping live API tests.");
-    console.log("   Set OPENAI_API_KEY to run full integration tests.\n");
+  // Live generation is opt-in because it bills the API key
+  const runLive = process.env.CREATE_IMAGE_LIVE_TEST === "1";
+  if (runLive && !process.env.OPENAI_API_KEY) {
+    console.error("\n❌ CREATE_IMAGE_LIVE_TEST=1 requires OPENAI_API_KEY in the environment.");
+    process.exitCode = 1;
+    return;
+  }
+  if (!runLive) {
+    console.log("\nℹ️  Skipping live generation. Set CREATE_IMAGE_LIVE_TEST=1 and OPENAI_API_KEY to run it (costs a few cents).\n");
   }
 
   // Start the server
   console.log("\n🚀 Starting MCP server...");
   const serverProcess = spawn("node", [join(projectRoot, "src", "index.js")], {
-    env: { ...process.env, OPENAI_API_KEY: process.env.OPENAI_API_KEY || "test-key-for-startup" },
+    env: { ...process.env, OPENAI_API_KEY: runLive ? process.env.OPENAI_API_KEY : "test-key-for-startup" },
     stdio: ["pipe", "pipe", "pipe"],
   });
+  serverProcess.on("error", (error) => rejectAllPending(new Error(`Server failed to start: ${error.message}`)));
+  serverProcess.on("exit", (code, signal) => rejectAllPending(new Error(`Server exited early (code ${code}, signal ${signal})`)));
 
   let stderrOutput = "";
   serverProcess.stderr.on("data", (data) => {
@@ -166,9 +183,9 @@ async function runTests() {
     // Validate schema
     const props = createImageTool.inputSchema.properties;
     const expectedProps = [
-      "prompt", "style", "input_images", "output_file", "size",
-      "quality", "background", "number_of_images", "output_mime_type", "system_message_file",
-      "mask", "input_fidelity",
+      "prompt", "model", "style", "input_images", "output_file", "size",
+      "quality", "background", "number_of_images", "output_mime_type", "output_compression",
+      "moderation", "system_message_file", "mask", "input_fidelity",
     ];
 
     for (const prop of expectedProps) {
@@ -183,13 +200,15 @@ async function runTests() {
         throw new Error(`Unexpected property in schema: ${prop}`);
       }
     }
-    console.log(`   ✅ All ${expectedProps.length} properties present in schema (including style, mask, input_fidelity)`);
+    console.log(`   ✅ All ${expectedProps.length} properties present in schema`);
 
-    // Validate enums
-    if (props.size.enum.length !== 4) {
-      throw new Error(`Expected 4 sizes, got ${props.size.enum.length}`);
+    // Validate model options
+    for (const model of ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"]) {
+      if (!props.model.enum.includes(model)) {
+        throw new Error(`Model enum missing ${model}`);
+      }
     }
-    console.log(`   ✅ ${props.size.enum.length} sizes defined`);
+    console.log(`   ✅ Models: ${props.model.enum.join(", ")}`);
 
     if (props.size.default !== "1024x1024") {
       throw new Error(`Expected default size 1024x1024, got ${props.size.default}`);
@@ -237,8 +256,13 @@ async function runTests() {
     }
     console.log(`   ✅ Missing prompt correctly rejected as tool error: ${errorText.substring(0, 60)}...`);
 
+    if (protocolErrors.length > 0) {
+      throw new Error(`Server wrote non-JSON to stdout: ${protocolErrors.join(" | ")}`);
+    }
+    console.log("   ✅ stdout carried only JSON-RPC messages");
+
     // ─── Test 4: Live API (optional) ───
-    if (hasApiKey) {
+    if (runLive) {
       console.log("\n🎨 Test 4: Live image generation...");
       console.log("   (This may take 10-30 seconds...)");
 
@@ -250,29 +274,39 @@ async function runTests() {
           output_file: outputPath,
           size: "1024x1024",
           quality: "low",
+          model: "gpt-image-2.5-flare",
         },
-      });
+      }, 300000);
 
       if (generateResponse.error) {
-        console.log(`   ⚠️  Generation failed (may be expected): ${generateResponse.error.message}`);
+        throw new Error(`Live generation returned a protocol error: ${generateResponse.error.message}`);
       } else {
         const result = generateResponse.result;
         const textContent = result.content.find((c) => c.type === "text");
+        if (result.isError) {
+          throw new Error(`Live generation failed: ${textContent?.text}`);
+        }
         if (textContent && textContent.text.includes("Image saved to:")) {
-          console.log(`   ✅ Image generated and saved successfully`);
-          console.log(`   ✅ Response: ${textContent.text.substring(0, 100)}`);
-          // Clean up test output
-          if (existsSync(outputPath)) {
-            const { unlinkSync } = await import("fs");
-            unlinkSync(outputPath);
-            console.log(`   ✅ Cleaned up test output file`);
+          try {
+            if (!existsSync(outputPath) || statSync(outputPath).size === 0) {
+              throw new Error(`Response claimed success but ${outputPath} is missing or empty`);
+            }
+            console.log(`   ✅ Image generated and saved (${statSync(outputPath).size} bytes)`);
+            console.log(`   ✅ Response: ${textContent.text.substring(0, 160)}`);
+          } finally {
+            if (existsSync(outputPath)) unlinkSync(outputPath);
           }
         } else {
-          console.log(`   ⚠️  Unexpected response: ${textContent?.text?.substring(0, 100)}`);
+          throw new Error(`Unexpected response: ${textContent?.text?.substring(0, 100)}`);
         }
       }
     } else {
-      console.log("\n⏭️  Test 4: Skipped (no API key)");
+      console.log("\n⏭️  Test 4: Skipped (live generation not enabled)");
+    }
+
+    // Re-check after the live call: logging during generation must not reach stdout either
+    if (protocolErrors.length > 0) {
+      throw new Error(`Server wrote non-JSON to stdout: ${protocolErrors.join(" | ")}`);
     }
 
     // Summary
@@ -288,6 +322,7 @@ async function runTests() {
     process.exitCode = 1;
   } finally {
     // Clean up
+    serverProcess.removeAllListeners("exit");
     serverProcess.kill("SIGTERM");
     await new Promise((resolve) => setTimeout(resolve, 500));
   }

@@ -29,9 +29,10 @@ Read the built-in style in `src/styles.js` to understand the JSON structure. Eac
 - `name`: Human-readable display name
 - `description`: What the style achieves (1-2 sentences)
 - `systemPrompt`: The prompt text that guides the image model. This is the core of the style.
-- `defaults`: Optional parameter defaults (`size`, `quality`, `background`, `output_mime_type`)
+- `defaults`: Optional parameter defaults (`model`, `size`, `quality`, `background`, `output_mime_type`, `output_compression`, `moderation`)
 
-Valid sizes: `1024x1024`, `1024x1536`, `1536x1024`, `auto`
+Valid models: `gpt-image-2.5-sunburst` (precision, default) or `gpt-image-2.5-flare` (fast)
+Valid sizes: `auto` or any `WIDTHxHEIGHT` with both edges multiples of 16, longest edge at most 3840, aspect ratio at most 3:1, 655,360-8,294,400 total pixels (e.g. `1024x1024`, `1536x1024`, `1024x1536`, `2048x1152`, `3840x2160`)
 Valid qualities: `low`, `medium`, `high`, `auto`
 Valid backgrounds: `transparent`, `opaque`, `auto`
 Valid output MIME types: `image/png`, `image/jpeg`, `image/webp`
@@ -44,7 +45,7 @@ Use `mcp__ask-google__ask_google` to research what makes this visual style effec
 - What defines this style visually (colors, composition, line work, etc.)
 - Best practices for AI image generation in this style
 - What to avoid (common failure modes with AI image generators)
-- How to describe it in a prompt that GPT Image 1.5 will interpret well
+- How to describe it in a prompt that GPT Image 2.5 will interpret well
 
 Do 2-3 rounds of research to refine your understanding. Be specific about GPT Image / OpenAI image models when searching.
 

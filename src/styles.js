@@ -45,7 +45,8 @@ function loadUserStyles() {
   const stylesPath = join(process.cwd(), STYLES_DIR);
   if (!existsSync(stylesPath)) return {};
 
-  const userStyles = {};
+  // Null prototype so file names like "constructor.json" or "__proto__.json" are plain keys
+  const userStyles = Object.create(null);
   let files;
   try {
     files = readdirSync(stylesPath);
@@ -59,7 +60,9 @@ function loadUserStyles() {
     try {
       const content = readFileSync(join(stylesPath, file), "utf-8");
       const style = JSON.parse(content);
-      if (style.systemPrompt && typeof style.systemPrompt === "string") {
+      const validDefaults = style.defaults === undefined ||
+        (typeof style.defaults === "object" && style.defaults !== null && !Array.isArray(style.defaults));
+      if (typeof style.systemPrompt === "string" && style.systemPrompt && validDefaults) {
         userStyles[styleName] = style;
       }
     } catch {
@@ -76,7 +79,7 @@ function loadUserStyles() {
  */
 function resolveStyles() {
   const userStyles = loadUserStyles();
-  return { ...BUILT_IN_STYLES, ...userStyles };
+  return Object.assign(Object.create(null), BUILT_IN_STYLES, userStyles);
 }
 
 /**
@@ -87,7 +90,7 @@ function resolveStyles() {
  */
 export function getStyle(name) {
   const all = resolveStyles();
-  return all[name] || null;
+  return Object.hasOwn(all, name) ? all[name] : null;
 }
 
 /**

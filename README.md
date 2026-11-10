@@ -1,10 +1,10 @@
 # Create Image MCP Server
 
-A Model Context Protocol (MCP) server that generates and edits images using OpenAI's GPT Image 2.5 models (`gpt-image-2.5-sunburst` and `gpt-image-2.5-flare`). This server enables Claude Desktop, Claude Code, and other MCP clients to create images from text descriptions and edit existing images.
+A Model Context Protocol (MCP) server that generates and edits images using OpenAI's GPT Image 2.6 models (`gpt-image-2.6-sunburst` and `gpt-image-2.6-flare`). This server enables Claude Desktop, Claude Code, and other MCP clients to create images from text descriptions and edit existing images.
 
 ## Features
 
-- Text-to-image generation via OpenAI GPT Image 2.5 (precision `sunburst` or fast `flare` model)
+- Text-to-image generation via OpenAI GPT Image 2.6 (precision `sunburst` or fast `flare` model)
 - Image editing and style transfer with input image support
 - Custom sizes up to 4K (3840x2160), plus quality, compression, and output format controls
 - Transparent background support
@@ -57,7 +57,7 @@ The server resolves settings in this order:
 
 Only `OPENAI_API_KEY` and `OPENAI_IMAGE_MODEL` are read from `.env` files. Other variables such as `OPENAI_BASE_URL` are ignored there, so a project's `.env` can't redirect your key to another server.
 
-Optionally set `OPENAI_IMAGE_MODEL` to change the default model (defaults to `gpt-image-2.5-sunburst`), for example to pin a dated snapshot such as `gpt-image-2.5-sunburst-2026-09-08`.
+Optionally set `OPENAI_IMAGE_MODEL` to change the default model (defaults to `gpt-image-2.6-sunburst`), for example to pin a dated snapshot such as `gpt-image-2.6-sunburst-YYYY-MM-DD`.
 
 ## Usage
 
@@ -98,7 +98,7 @@ Generate or edit images using OpenAI GPT Image.
 |-----------|----------|------|---------|-------------|
 | `prompt` | Yes | string | - | Image description or editing instructions (1-32,000 chars) |
 | `output_file` | Yes | string | - | File path to save the generated image (absolute recommended; `~/` is expanded) |
-| `model` | No | enum | `gpt-image-2.5-sunburst` | `gpt-image-2.5-sunburst` (precision) or `gpt-image-2.5-flare` (faster, for drafts) |
+| `model` | No | enum | `gpt-image-2.6-sunburst` | `gpt-image-2.6-sunburst` (precision) or `gpt-image-2.6-flare` (faster, for drafts) |
 | `style` | No | enum | - | Style preset (built-in: `ui-mockup`; add your own in `create-image-styles/`) |
 | `input_images` | No | array | - | File paths to input images for editing (PNG/JPEG/WebP, up to 16 images, max 20MB each) |
 | `size` | No | string | `1024x1024` | `auto` or `WIDTHxHEIGHT`, e.g. `1536x1024`, `2048x1152`, `3840x2160` (see size rules below) |

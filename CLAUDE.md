@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Model Context Protocol (MCP) server that generates and edits images using OpenAI's GPT Image 2.5 models (`gpt-image-2.5-sunburst` default, `gpt-image-2.5-flare` fast). It enables Claude Desktop, Claude Code, and other MCP clients to create images from text descriptions.
+This is a Model Context Protocol (MCP) server that generates and edits images using OpenAI's GPT Image 2.6 models (`gpt-image-2.6-sunburst` default, `gpt-image-2.6-flare` fast). It enables Claude Desktop, Claude Code, and other MCP clients to create images from text descriptions.
 
 **Key Technologies:**
 - MCP SDK (`@modelcontextprotocol/sdk`) for stdio server transport and JSON-RPC 2.0 communication
@@ -69,7 +69,7 @@ The server implements a **single-tool MCP server** following the stdio transport
 
 ### OpenAI Model Configuration
 
-**Models**: `gpt-image-2.5-sunburst` (default, precision) and `gpt-image-2.5-flare` (fast), selectable per call via `model`; `OPENAI_IMAGE_MODEL` changes the default. `gpt-image-1.5` is deprecated (shutdown 2026-12-01).
+**Models**: `gpt-image-2.6-sunburst` (default, precision) and `gpt-image-2.6-flare` (fast), selectable per call via `model`; `OPENAI_IMAGE_MODEL` changes the default. `gpt-image-1.5` is deprecated (shutdown 2026-12-01).
 - Sizes: `auto` or any WxH with edges divisible by 16, longest edge <= 3840, aspect <= 3:1, 655,360-8,294,400 total pixels (validated locally by `validateSize`)
 - Moderation: auto, low. Output compression: 0-100 (JPEG/WebP only)
 - Quality levels: low, medium, high, auto (default: auto)
@@ -87,7 +87,7 @@ The server implements a **single-tool MCP server** following the stdio transport
 |-----------|----------|------|---------|-------------|
 | `prompt` | Yes | string | - | Image description or editing instructions (1-32,000 chars) |
 | `output_file` | Yes | string | - | File path to save the generated image |
-| `model` | No | enum | gpt-image-2.5-sunburst | gpt-image-2.5-sunburst, gpt-image-2.5-flare |
+| `model` | No | enum | gpt-image-2.6-sunburst | gpt-image-2.6-sunburst, gpt-image-2.6-flare |
 | `style` | No | enum | - | Style preset (built-in: ui-mockup; user styles via create-image-styles/) |
 | `input_images` | No | array | - | File paths to input images for editing |
 | `size` | No | string | 1024x1024 | auto or WxH within the limits above |

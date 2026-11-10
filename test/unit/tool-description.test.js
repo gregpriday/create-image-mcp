@@ -23,9 +23,9 @@ describe("Exported Constants", () => {
     }
   });
 
-  it("should offer both GPT Image 2.5 models", () => {
-    assert.ok(VALID_MODELS.includes("gpt-image-2.5-sunburst"));
-    assert.ok(VALID_MODELS.includes("gpt-image-2.5-flare"));
+  it("should offer both GPT Image 2.6 models", () => {
+    assert.ok(VALID_MODELS.includes("gpt-image-2.6-sunburst"));
+    assert.ok(VALID_MODELS.includes("gpt-image-2.6-flare"));
   });
 
   it("should have 2 valid moderation levels", () => {
@@ -68,7 +68,7 @@ describe("Tool Schema", async () => {
   });
 
   it("should guide the agent on model, quality, and size choices", () => {
-    for (const phrase of ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare", "quality", "'low'", "'high'", "2048x1152", "3840x2160", "transparent"]) {
+    for (const phrase of ["gpt-image-2.6-sunburst", "gpt-image-2.6-flare", "quality", "'low'", "'high'", "2048x1152", "3840x2160", "transparent"]) {
       assert.ok(tool.description.includes(phrase), `description missing ${phrase}`);
     }
   });
@@ -79,10 +79,10 @@ describe("Tool Schema", async () => {
     }
   });
 
-  it("should default model to the configured model and list both 2.5 models", () => {
+  it("should default model to the configured model and list both 2.6 models", () => {
     assert.strictEqual(props.model.default, IMAGE_MODEL);
-    assert.ok(props.model.enum.includes("gpt-image-2.5-sunburst"));
-    assert.ok(props.model.enum.includes("gpt-image-2.5-flare"));
+    assert.ok(props.model.enum.includes("gpt-image-2.6-sunburst"));
+    assert.ok(props.model.enum.includes("gpt-image-2.6-flare"));
   });
 
   it("should accept free-form sizes via a pattern with presets as examples", () => {

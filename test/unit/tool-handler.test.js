@@ -1779,31 +1779,31 @@ describe("Argument Robustness", () => {
   });
 });
 
-// ─── GPT Image 2.5 Parameters ───
+// ─── GPT Image 2.6 Parameters ───
 
-describe("GPT Image 2.5 Parameters", () => {
+describe("GPT Image 2.6 Parameters", () => {
   let mockAPI;
 
   beforeEach(() => {
     mockAPI = new MockOpenAI();
   });
 
-  it("should default to gpt-image-2.5-sunburst", async () => {
+  it("should default to gpt-image-2.6-sunburst", async () => {
     try {
       await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT }, mockAPI);
       assert.strictEqual(mockAPI.lastRequest.model, IMAGE_MODEL);
       if (!process.env.OPENAI_IMAGE_MODEL) {
-        assert.strictEqual(IMAGE_MODEL, "gpt-image-2.5-sunburst");
+        assert.strictEqual(IMAGE_MODEL, "gpt-image-2.6-sunburst");
       }
     } finally {
       cleanup(DEFAULT_OUTPUT);
     }
   });
 
-  it("should use gpt-image-2.5-flare when requested", async () => {
+  it("should use gpt-image-2.6-flare when requested", async () => {
     try {
-      await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, model: "gpt-image-2.5-flare" }, mockAPI);
-      assert.strictEqual(mockAPI.lastRequest.model, "gpt-image-2.5-flare");
+      await handleCreateImage({ prompt: "test", output_file: DEFAULT_OUTPUT, model: "gpt-image-2.6-flare" }, mockAPI);
+      assert.strictEqual(mockAPI.lastRequest.model, "gpt-image-2.6-flare");
     } finally {
       cleanup(DEFAULT_OUTPUT);
     }

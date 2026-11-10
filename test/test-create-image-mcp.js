@@ -203,7 +203,7 @@ async function runTests() {
     console.log(`   ✅ All ${expectedProps.length} properties present in schema`);
 
     // Validate model options
-    for (const model of ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"]) {
+    for (const model of ["gpt-image-2.6-sunburst", "gpt-image-2.6-flare"]) {
       if (!props.model.enum.includes(model)) {
         throw new Error(`Model enum missing ${model}`);
       }
@@ -274,7 +274,7 @@ async function runTests() {
           output_file: outputPath,
           size: "1024x1024",
           quality: "low",
-          model: "gpt-image-2.5-flare",
+          model: "gpt-image-2.6-flare",
         },
       }, 300000);
 

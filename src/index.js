@@ -61,7 +61,7 @@ const openai = apiKey
 
 // Image generation models: sunburst is the precision model, flare the faster one.
 // OPENAI_IMAGE_MODEL changes the default (e.g. to pin a dated snapshot).
-const KNOWN_MODELS = ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"];
+const KNOWN_MODELS = ["gpt-image-2.6-sunburst", "gpt-image-2.6-flare"];
 const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || KNOWN_MODELS[0];
 const VALID_MODELS = [...new Set([IMAGE_MODEL, ...KNOWN_MODELS])];
 
@@ -271,10 +271,10 @@ const MIME_TYPE_EXTENSIONS = {
 // cost notes come from measured runs (1024x1024: high quality used ~9x the output
 // tokens of low; flare finished high quality in ~60% of sunburst's time).
 const TOOL_DESCRIPTION = [
-  "Generate or edit images with OpenAI GPT Image 2.5 and save them to disk. Use when asked to 'create an image', 'generate a picture', 'draw', 'make an illustration', 'design a logo/icon/mockup', 'edit an image', 'transform a photo', or any visual content creation request. Pass input_images to edit, combine, or restyle existing images.",
+  "Generate or edit images with OpenAI GPT Image 2.6 and save them to disk. Use when asked to 'create an image', 'generate a picture', 'draw', 'make an illustration', 'design a logo/icon/mockup', 'edit an image', 'transform a photo', or any visual content creation request. Pass input_images to edit, combine, or restyle existing images.",
   "",
   `The defaults (${IMAGE_MODEL}, auto quality, 1024x1024 PNG) work well for most requests. When the request calls for something else:`,
-  `- model: 'gpt-image-2.5-sunburst' is the precision model: best for final assets, legible text, logos, and fine detail. 'gpt-image-2.5-flare' is faster, especially at higher quality: use it for drafts, brainstorming, and batches of variations. Default: '${IMAGE_MODEL}'.`,
+  `- model: 'gpt-image-2.6-sunburst' is the precision model: best for final assets, legible text, logos, and fine detail. 'gpt-image-2.6-flare' is faster, especially at higher quality: use it for drafts, brainstorming, and batches of variations. Default: '${IMAGE_MODEL}'.`,
   "- quality: 'low' for quick drafts and thumbnails (cheapest: about 1/9 the output tokens of high); 'medium' for everyday images; 'high' for final deliverables, small or dense text, and detailed scenes; 'auto' (default) lets the model decide.",
   "- size: match the aspect ratio to the use: '1024x1024' square (icons, avatars, social posts), '1536x1024' landscape, '1024x1536' portrait (posters, phone screens), '2048x1152' 16:9 (banners, slides, hero images), '1152x2048' 9:16 (stories). Up to '3840x2160'/'2160x3840' for 4K. Bigger sizes cost more and take longer.",
   "- background 'transparent' for logos, icons, and stickers (PNG or WebP only). Use a .jpg output_file with output_compression for smaller photographic files.",
@@ -304,7 +304,7 @@ function inputSchemaProperties() {
     },
     model: {
       type: "string",
-      description: `Image model. 'gpt-image-2.5-sunburst': precision model for final assets, legible text, and fine detail. 'gpt-image-2.5-flare': faster model for drafts, exploration, and variations; quality is close to sunburst for most scenes. Default: '${IMAGE_MODEL}'.`,
+      description: `Image model. 'gpt-image-2.6-sunburst': precision model for final assets, legible text, and fine detail. 'gpt-image-2.6-flare': faster model for drafts, exploration, and variations; quality is close to sunburst for most scenes. Default: '${IMAGE_MODEL}'.`,
       enum: VALID_MODELS,
       default: IMAGE_MODEL,
     },

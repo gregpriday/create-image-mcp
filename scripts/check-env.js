@@ -14,7 +14,7 @@ import { resolveEnv, envFilePaths } from "../src/env.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const packageJson = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
 
-const KNOWN_MODELS = ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"];
+const KNOWN_MODELS = ["gpt-image-2.6-sunburst", "gpt-image-2.6-flare"];
 
 function checkApiKey(entry) {
   if (!entry || !entry.value) {
@@ -41,7 +41,7 @@ function checkModel(entry) {
   } else if (KNOWN_MODELS.includes(entry.value) || KNOWN_MODELS.some((m) => entry.value.startsWith(`${m}-`))) {
     console.log(`✅ OPENAI_IMAGE_MODEL: ${entry.value} (from ${entry.source})`);
   } else {
-    console.log(`⚠️  OPENAI_IMAGE_MODEL: ${entry.value} (from ${entry.source}) is not a GPT Image 2.5 model; the server will still use it as the default`);
+    console.log(`⚠️  OPENAI_IMAGE_MODEL: ${entry.value} (from ${entry.source}) is not a GPT Image 2.6 model; the server will still use it as the default`);
   }
 }
 

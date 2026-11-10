@@ -80,13 +80,13 @@ describe("OPENAI_IMAGE_MODEL override", () => {
     `;
     const output = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
       cwd: sandbox,
-      env: childEnv({ OPENAI_IMAGE_MODEL: "gpt-image-2.5-flare-2026-09-08" }),
+      env: childEnv({ OPENAI_IMAGE_MODEL: "gpt-image-2.6-flare-2026-09-08" }),
       encoding: "utf-8",
       timeout: 10000,
     });
     const { model, enumValues, description } = JSON.parse(output);
-    assert.strictEqual(model, "gpt-image-2.5-flare-2026-09-08");
-    assert.deepStrictEqual(enumValues, ["gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare"]);
-    assert.ok(description.includes("Default: 'gpt-image-2.5-flare-2026-09-08'"));
+    assert.strictEqual(model, "gpt-image-2.6-flare-2026-09-08");
+    assert.deepStrictEqual(enumValues, ["gpt-image-2.6-flare-2026-09-08", "gpt-image-2.6-sunburst", "gpt-image-2.6-flare"]);
+    assert.ok(description.includes("Default: 'gpt-image-2.6-flare-2026-09-08'"));
   });
 });

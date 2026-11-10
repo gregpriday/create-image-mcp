@@ -22,7 +22,7 @@ describe("resolveEnv", () => {
     ].join("\n"));
     writeFileSync(join(home, ".env"), [
       "OPENAI_API_KEY=home-key",
-      "OPENAI_IMAGE_MODEL=gpt-image-2.5-flare",
+      "OPENAI_IMAGE_MODEL=gpt-image-2.6-flare",
     ].join("\n"));
   });
 
@@ -41,7 +41,7 @@ describe("resolveEnv", () => {
 
   it("should fall back to ~/.env for keys the working directory lacks", () => {
     const env = resolveEnv({ env: {}, cwd, home });
-    assert.strictEqual(env.OPENAI_IMAGE_MODEL.value, "gpt-image-2.5-flare");
+    assert.strictEqual(env.OPENAI_IMAGE_MODEL.value, "gpt-image-2.6-flare");
     assert.strictEqual(env.OPENAI_IMAGE_MODEL.source, join(home, ".env"));
   });
 
